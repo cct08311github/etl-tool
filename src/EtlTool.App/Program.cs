@@ -230,6 +230,13 @@ app.UseAntiforgery();
 // 否則登入頁本身的樣式會破版且 favicon / blazor.web.js 會被導向回登入頁。
 app.MapStaticAssets().AllowAnonymous();
 app.MapHealthChecks("/healthz").AllowAnonymous();
+// Detailed health JSON — db / quartz / connection monitor / audit write 各 component 細節
+// 給銀行 ops 監控系統解析；簡單的 /healthz 仍保留供 LB / firewall 用
+app.MapGet("/healthz/detail", async (HttpContext ctx) =>
+{
+    var detail = await DetailedHealthCheck.CollectAsync(ctx.RequestServices, ctx.RequestAborted);
+    await DetailedHealthCheck.WriteJsonAsync(ctx, detail);
+}).AllowAnonymous();
 app.MapMetrics("/metrics").AllowAnonymous();   // Prometheus scrape endpoint (banks 應在 ingress / firewall 限制來源 IP)
 app.MapRazorPages();
 app.MapRazorComponents<App>()

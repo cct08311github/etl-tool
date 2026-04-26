@@ -49,17 +49,31 @@ public sealed class RunHistoryRetentionService : BackgroundService
 
     private async Task RunOnceAsync(CancellationToken ct)
     {
-        var policy = ReadPolicy();
-        if (policy.KeepDays is null && policy.KeepLastPerTask is null)
-        {
-            _log.LogInformation("RunHistory retention disabled.");
-            return;
-        }
+        var basePolicy = ReadPolicy();
 
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            // 收集 per-task overrides — 任何有設 RunHistoryRetentionRuns 的 task
+            var overrides = await db.EtlTasks
+                .AsNoTracking()
+                .Where(t => t.RunHistoryRetentionRuns != null && t.RunHistoryRetentionRuns > 0)
+                .Select(t => new { t.Id, N = t.RunHistoryRetentionRuns!.Value })
+                .ToDictionaryAsync(x => x.Id, x => x.N, ct);
+
+            var policy = new RunHistoryRetentionPolicy(
+                basePolicy.KeepDays,
+                basePolicy.KeepLastPerTask,
+                overrides.Count > 0 ? overrides : null);
+
+            // 全部 disabled 才略過（沒設 KeepDays 也沒 KeepLastPerTask 也沒 per-task override）
+            if (policy.KeepDays is null && policy.KeepLastPerTask is null && overrides.Count == 0)
+            {
+                _log.LogInformation("RunHistory retention disabled.");
+                return;
+            }
 
             var allRuns = await db.RunHistories
                 .AsNoTracking()
@@ -90,7 +104,8 @@ public sealed class RunHistoryRetentionService : BackgroundService
                 totalDeleted += deleted;
             }
 
-            _log.LogInformation("RunHistory retention: deleted {Deleted}/{Total}.", totalDeleted, allRuns.Count);
+            _log.LogInformation("RunHistory retention: deleted {Deleted}/{Total} (per-task overrides={OverrideCount}).",
+                totalDeleted, allRuns.Count, overrides.Count);
         }
         catch (Exception ex)
         {

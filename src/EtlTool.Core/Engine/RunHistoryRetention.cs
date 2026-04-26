@@ -4,7 +4,8 @@ namespace EtlTool.Core.Engine;
 
 public sealed record RunHistoryRetentionPolicy(
     int? KeepDays,
-    int? KeepLastPerTask);
+    int? KeepLastPerTask,
+    IReadOnlyDictionary<Guid, int>? PerTaskOverrides = null);
 
 public static class RunHistoryRetention
 {
@@ -24,7 +25,7 @@ public static class RunHistoryRetention
     {
         ValidatePolicy(policy);
 
-        if (policy.KeepDays is null && policy.KeepLastPerTask is null)
+        if (policy.KeepDays is null && policy.KeepLastPerTask is null && (policy.PerTaskOverrides is null || policy.PerTaskOverrides.Count == 0))
             return Array.Empty<Guid>();
 
         var allRuns = events.ToList();
@@ -46,6 +47,14 @@ public static class RunHistoryRetention
 
         if (policy.KeepLastPerTask.HasValue && policy.KeepLastPerTask.Value <= 0)
             throw new ArgumentException("KeepLastPerTask must be > 0.", nameof(policy));
+
+        if (policy.PerTaskOverrides is not null)
+        {
+            foreach (var kvp in policy.PerTaskOverrides)
+                if (kvp.Value <= 0)
+                    throw new ArgumentException(
+                        $"PerTaskOverrides[{kvp.Key}] must be > 0 (got {kvp.Value}).", nameof(policy));
+        }
     }
 
     private static HashSet<Guid> BuildKeepSet(
@@ -62,12 +71,26 @@ public static class RunHistoryRetention
                 keepIds.Add(r.Id);
         }
 
-        if (policy.KeepLastPerTask.HasValue)
+        // Per-task last-N：每個 task 採用 PerTaskOverrides[taskId]（若有）優先；否則退化到全域 KeepLastPerTask。
+        // 注意：若某 task 既沒 override 也沒 global → 該 task 的所有 runs 全保留（不要因為 group 沒 policy 就誤刪）。
+        var hasPerTaskPolicy = policy.KeepLastPerTask.HasValue || (policy.PerTaskOverrides is not null && policy.PerTaskOverrides.Count > 0);
+        if (hasPerTaskPolicy)
         {
-            var n = policy.KeepLastPerTask.Value;
             foreach (var group in runs.GroupBy(r => r.EtlTaskId))
             {
-                foreach (var r in group.OrderByDescending(r => r.StartedAt).Take(n))
+                int? n = null;
+                if (policy.PerTaskOverrides is not null && policy.PerTaskOverrides.TryGetValue(group.Key, out var overrideN))
+                    n = overrideN;
+                else if (policy.KeepLastPerTask.HasValue)
+                    n = policy.KeepLastPerTask.Value;
+
+                if (n is null)
+                {
+                    // 沒任何政策套到此 task → 全留
+                    foreach (var r in group) keepIds.Add(r.Id);
+                    continue;
+                }
+                foreach (var r in group.OrderByDescending(r => r.StartedAt).Take(n.Value))
                     keepIds.Add(r.Id);
             }
         }

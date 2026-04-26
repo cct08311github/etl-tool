@@ -79,8 +79,12 @@
                 <label class="form-label">結束 (本地)</label>
                 <input type="datetime-local" class="form-control form-control-sm" @bind="_until" @bind:after="RunQuery" />
             </div>
-            <div class="col-md-3">
-                <label class="form-label">搜尋（訊息 / 目標名稱）</label>
+            <div class="col-md-2">
+                <label class="form-label">執行者</label>
+                <input class="form-control form-control-sm" placeholder="actor 名稱…" @bind="_actor" @bind:after="RunQuery" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">搜尋（訊息/目標/執行者）</label>
                 <input class="form-control form-control-sm" placeholder="關鍵字…" @bind="_search" @bind:after="RunQuery" />
             </div>
             <div class="col-md-1 d-flex gap-1">
@@ -175,6 +179,7 @@ else
     private DateTime? _since;
     private DateTime? _until;
     private string _search = "";
+    private string _actor = "";
 
     private List<AuditEvent> _items = new();
     private int _total;
@@ -218,6 +223,7 @@ else
             Category: Enum.TryParse<AuditCategory>(_category, out var c) ? c : null,
             MinSeverity: Enum.TryParse<AuditSeverity>(_severity, out var s) ? s : null,
             Search: string.IsNullOrWhiteSpace(_search) ? null : _search,
+            Actor: string.IsNullOrWhiteSpace(_actor) ? null : _actor,
             Skip: _skip,
             Take: _take);
 
@@ -243,7 +249,7 @@ else
 
     private async Task Reset()
     {
-        _category = ""; _severity = ""; _since = null; _until = null; _search = "";
+        _category = ""; _severity = ""; _since = null; _until = null; _search = ""; _actor = "";
         await RunQuery();
     }
 

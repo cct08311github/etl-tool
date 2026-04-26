@@ -151,6 +151,7 @@ public sealed class AuditQueryRepository
         AuditCategory? Category = null,
         AuditSeverity? MinSeverity = null,
         string? Search = null,
+        string? Actor = null,
         int Skip = 0,
         int Take = 50);
 
@@ -162,12 +163,19 @@ public sealed class AuditQueryRepository
         if (q.Until is { } until) baseQuery = baseQuery.Where(e => e.At <= until);
         if (q.Category is { } cat) baseQuery = baseQuery.Where(e => e.Category == cat);
         if (q.MinSeverity is { } sev) baseQuery = baseQuery.Where(e => e.Severity >= sev);
+        if (!string.IsNullOrWhiteSpace(q.Actor))
+        {
+            var a = q.Actor!;
+            baseQuery = baseQuery.Where(e => e.Actor != null && EF.Functions.Like(e.Actor, "%" + a + "%"));
+        }
         if (!string.IsNullOrWhiteSpace(q.Search))
         {
             var s = q.Search!;
+            // 把 Search 同時擴及 Actor，方便 admin 一個欄位搜尋
             baseQuery = baseQuery.Where(e =>
                 EF.Functions.Like(e.Message, "%" + s + "%") ||
-                (e.TargetName != null && EF.Functions.Like(e.TargetName, "%" + s + "%")));
+                (e.TargetName != null && EF.Functions.Like(e.TargetName, "%" + s + "%")) ||
+                (e.Actor != null && EF.Functions.Like(e.Actor, "%" + s + "%")));
         }
 
         var total = await baseQuery.CountAsync(ct);

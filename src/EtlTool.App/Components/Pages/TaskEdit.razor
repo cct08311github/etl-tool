@@ -46,6 +46,13 @@ else
                     <label class="form-label">批次大小</label>
                     <input class="form-control" type="number" min="1" max="100000" @bind="_task.BatchSize" />
                 </div>
+                <div class="col-md-3">
+                    <label class="form-label">執行歷史保留筆數
+                        <small class="text-muted" title="留空 = 套用全域設定 RunHistory:KeepLastPerTask">(覆寫)</small>
+                    </label>
+                    <input class="form-control" type="number" min="1" max="10000"
+                           placeholder="(留空=用全域設定)" @bind="_task.RunHistoryRetentionRuns" />
+                </div>
             </div>
         </div>
     </div>

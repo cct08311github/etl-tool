@@ -81,6 +81,12 @@ public class EtlTask
     public EtlTool.Core.Engine.RowCountAssertionPolicy RowCountPolicy { get; set; }
         = EtlTool.Core.Engine.RowCountAssertionPolicy.Warn;
 
+    /// <summary>
+    /// 此任務專屬的 RunHistory 保留筆數覆寫；null = 套用全域 RunHistory:KeepLastPerTask 設定。
+    /// 銀行常見：高風險任務（人事資料、財務）保留 365 天，其他任務套全域 100 筆即可。
+    /// </summary>
+    public int? RunHistoryRetentionRuns { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
