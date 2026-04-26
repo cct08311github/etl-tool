@@ -113,10 +113,15 @@ public sealed class SchedulerService
 
         if (includeTrigger && !string.IsNullOrWhiteSpace(task.CronExpression))
         {
+            // 銀行可靠度：misfire policy = DoNothing
+            // 若 service 重啟或 thread pool 飽和導致 trigger 錯過，**不要補跑**
+            // 直接等下一次正常排程即可。否則開機後可能瞬間觸發數十個堆積的 job，
+            // 把目標 DB 打爆，且資料時間語意（${YESTERDAY} 等 token）會錯亂。
             var trigger = TriggerBuilder.Create()
                 .WithIdentity($"trg_{task.Id}", "etl")
                 .ForJob(jobKey)
-                .WithCronSchedule(task.CronExpression)
+                .WithCronSchedule(task.CronExpression, csb => csb
+                    .WithMisfireHandlingInstructionDoNothing())
                 .Build();
             await scheduler.ScheduleJob(trigger, ct);
         }

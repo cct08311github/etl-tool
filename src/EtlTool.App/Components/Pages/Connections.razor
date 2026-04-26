@@ -46,6 +46,7 @@ else
                 <th>名稱</th>
                 <th>類型</th>
                 <th>健康狀態</th>
+                <th>連線字串更新</th>
                 <th>建立時間</th>
                 <th class="text-end">操作</th>
             </tr>
@@ -80,6 +81,27 @@ else
                     {
                         <span class="badge bg-danger" title="@(c.LastCheckError ?? "")">失敗</span>
                         <small class="text-muted ms-1">@FormatRelative(c.LastCheckedAt.Value)</small>
+                    }
+                </td>
+                <td class="small">
+                    @{
+                        var ageDays = (int)(DateTime.UtcNow - c.UpdatedAt).TotalDays;
+                    }
+                    @if (ageDays >= RotationWarnDays)
+                    {
+                        <span class="badge bg-danger" title="@($"上次更新 {c.UpdatedAt.ToLocalTime():yyyy-MM-dd}，建議定期輪替")">
+                            <Icon Name="alert-triangle" /> @ageDays 天
+                        </span>
+                    }
+                    else if (ageDays >= RotationSoftDays)
+                    {
+                        <span class="badge bg-warning text-dark" title="@($"上次更新 {c.UpdatedAt.ToLocalTime():yyyy-MM-dd}")">
+                            @ageDays 天
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">@(ageDays == 0 ? "今日" : $"{ageDays} 天前")</span>
                     }
                 </td>
                 <td class="small text-muted">@c.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
@@ -129,6 +151,10 @@ else
 }
 
 @code {
+    // 銀行控管：建議連線字串密碼定期輪替（90 天黃，180 天紅警告）
+    private const int RotationSoftDays = 90;
+    private const int RotationWarnDays = 180;
+
     private List<EtlTool.Core.Models.ConnectionDefinition>? _items;
     private HashSet<Guid> _pendingTargets = new();
     private string? _currentUsername;

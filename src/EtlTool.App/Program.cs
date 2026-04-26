@@ -130,6 +130,7 @@ builder.Services.AddHostedService<AuditRetentionService>();
 builder.Services.AddHostedService<RunHistoryRetentionService>();
 builder.Services.AddHostedService<ConnectionHealthMonitor>();
 builder.Services.AddHostedService<MetricsScraperService>();
+builder.Services.AddHostedService<ApprovalExpirySweepService>();
 
 // Authentication / Authorization
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
