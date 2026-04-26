@@ -19,6 +19,7 @@ public sealed class AdminIpAllowlistMiddleware
         "/approvals",
         "/audit",                      // future audit pages
         "/scheduler",                  // scheduler inspection — diagnostic but reveals job structure
+        "/system",                     // system info page — paths, sizes, webhook URL host (masked but still)
         "/Account/AuditExport",        // downloading full audit trail = sensitive
     };
 

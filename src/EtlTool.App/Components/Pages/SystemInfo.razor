@@ -1,0 +1,246 @@
+@page "/system"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+@using Microsoft.EntityFrameworkCore
+@inject EtlTool.Data.AppDbContext Db
+@inject IConfiguration Config
+@inject IHostEnvironment HostEnv
+@inject EtlTool.App.Auth.AdminIpAllowlistService Allowlist
+@inject EtlTool.Data.Repositories.AuditChainVerifier ChainVerifier
+
+<PageTitle>系統資訊</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">系統資訊</h1>
+    <button class="btn btn-sm btn-outline-primary" @onclick="Reload">
+        <Icon Name="refresh" /> 重新整理
+    </button>
+</div>
+
+@if (_loading)
+{
+    <p class="text-muted">載入中…</p>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header">執行環境</div>
+        <table class="table mb-0 align-middle">
+            <tbody>
+                <tr><th style="width: 30%">應用程式組件版本</th><td><code>@_assemblyVersion</code></td></tr>
+                <tr><th>建置時間 (UTC)</th><td><code>@(_buildTime?.ToString("o") ?? "—")</code></td></tr>
+                <tr><th>.NET 版本</th><td><code>@Environment.Version</code> / <code>@System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription</code></td></tr>
+                <tr><th>OS</th><td><code>@System.Runtime.InteropServices.RuntimeInformation.OSDescription</code> / arch <code>@System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture</code></td></tr>
+                <tr><th>主機名稱</th><td><code>@Environment.MachineName</code></td></tr>
+                <tr><th>環境</th><td><code>@HostEnv.EnvironmentName</code></td></tr>
+                <tr><th>process id / uptime</th><td><code>@_pid</code> · 已運行 @_uptime</td></tr>
+                <tr><th>process memory (working set)</th><td><code>@_workingSet</code></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">資料庫</div>
+        <table class="table mb-0 align-middle">
+            <tbody>
+                <tr><th style="width: 30%">SQLite 路徑</th><td><code class="small">@_dbPath</code></td></tr>
+                <tr><th>資料庫檔案大小</th><td><code>@_dbSizeFormatted</code></td></tr>
+                <tr><th>連線總數</th><td><code>@_counts.Connections</code></td></tr>
+                <tr><th>任務總數 / 啟用</th><td><code>@_counts.Tasks</code> / <code>@_counts.EnabledTasks</code></td></tr>
+                <tr><th>RunHistory 總數</th><td><code>@_counts.Runs</code></td></tr>
+                <tr><th>AuditEvent 總數</th><td><code>@_counts.AuditEvents</code></td></tr>
+                <tr><th>使用者總數</th><td><code>@_counts.Users</code></td></tr>
+                <tr><th>覆核佇列 (待決定)</th><td><code>@_counts.PendingApprovals</code></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">保留政策 (Retention)</div>
+        <table class="table mb-0 align-middle">
+            <tbody>
+                <tr><th style="width: 30%">Audit 保留</th><td>
+                    <code>RetentionDays = @(_retention.AuditDays?.ToString() ?? "(未設)")</code>;
+                    <code>KeepLastPerCategory = @(_retention.AuditPerCategory?.ToString() ?? "(未設)")</code>
+                </td></tr>
+                <tr><th>RunHistory 保留</th><td>
+                    <code>RetentionDays = @(_retention.RunDays?.ToString() ?? "(未設)")</code>;
+                    <code>KeepLastPerTask = @(_retention.RunPerTask?.ToString() ?? "(未設)")</code>
+                </td></tr>
+                <tr><th>Session 逾時 (分)</th><td><code>@_retention.SessionMinutes</code></td></tr>
+                <tr><th>密碼最大年齡 (天)</th><td><code>@(_retention.MaxPasswordAgeDays > 0 ? _retention.MaxPasswordAgeDays.ToString() : "(停用)")</code></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">安全</div>
+        <table class="table mb-0 align-middle">
+            <tbody>
+                <tr><th style="width: 30%">Admin IP allowlist</th><td>
+                    @if (Allowlist.IsEnabled)
+                    {
+                        <span class="badge bg-success">已啟用</span>
+                        <span class="ms-2 small text-muted">@string.Join(", ", Allowlist.RawEntries)</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-secondary">未啟用</span>
+                        <span class="ms-2 small text-muted">所有來源 IP 可存取 admin 路徑（依賴角色控管）</span>
+                    }
+                </td></tr>
+                <tr><th>Failure webhook URL</th><td>
+                    @if (string.IsNullOrEmpty(_security.WebhookUrl))
+                    {
+                        <span class="text-muted small">未設定（失敗不會推 webhook）</span>
+                    }
+                    else
+                    {
+                        <code class="small">@MaskUrl(_security.WebhookUrl)</code>
+                        <span class="ms-2 small text-muted">format = @(_security.WebhookFormat ?? "generic")</span>
+                    }
+                </td></tr>
+                <tr><th>Failure streak threshold</th><td><code>@_security.FailureStreakThreshold</code> 次</td></tr>
+                <tr><th>Audit chain head/tail hash</th><td>
+                    <div class="small font-monospace text-break">
+                        head: <code>@(_chainHeadHash ?? "—")</code><br />
+                        tail: <code>@(_chainTailHash ?? "—")</code>
+                    </div>
+                    <a href="/logs" class="btn btn-sm btn-link p-0">至活動日誌驗證鏈完整性 →</a>
+                </td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="alert alert-info small mb-0">
+        提示：本頁僅顯示靜態組態與計數。即時排程器狀態請見 <a href="/scheduler">/scheduler</a>；
+        詳細健康檢查（含元件 latency）請見 <a href="/healthz/detail" target="_blank">/healthz/detail</a>。
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private string _assemblyVersion = "—";
+    private DateTime? _buildTime;
+    private int _pid;
+    private string _uptime = "—";
+    private string _workingSet = "—";
+    private string _dbPath = "—";
+    private string _dbSizeFormatted = "—";
+
+    private record Counts(int Connections, int Tasks, int EnabledTasks, long Runs, long AuditEvents, int Users, int PendingApprovals);
+    private Counts _counts = new(0, 0, 0, 0, 0, 0, 0);
+
+    private record Retention(int? AuditDays, int? AuditPerCategory, int? RunDays, int? RunPerTask,
+        int SessionMinutes, int MaxPasswordAgeDays);
+    private Retention _retention = new(null, null, null, null, 0, 0);
+
+    private record Security(string? WebhookUrl, string? WebhookFormat, int FailureStreakThreshold);
+    private Security _security = new(null, null, 0);
+
+    private string? _chainHeadHash;
+    private string? _chainTailHash;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var asm = typeof(SystemInfo).Assembly;
+            _assemblyVersion = asm.GetName().Version?.ToString() ?? "(unknown)";
+            try { _buildTime = File.GetLastWriteTimeUtc(asm.Location); } catch { }
+
+            var p = System.Diagnostics.Process.GetCurrentProcess();
+            _pid = p.Id;
+            var up = DateTime.UtcNow - p.StartTime.ToUniversalTime();
+            _uptime = $"{(int)up.TotalDays}d {up.Hours}h {up.Minutes}m";
+            _workingSet = FormatBytes(p.WorkingSet64);
+
+            // SQLite 檔案路徑與大小
+            try
+            {
+                var connStr = Db.Database.GetConnectionString() ?? "";
+                var dataSrc = connStr.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
+                    .FirstOrDefault(s => s.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase));
+                if (dataSrc is not null)
+                {
+                    _dbPath = dataSrc["Data Source=".Length..].Trim('"', ' ');
+                    if (File.Exists(_dbPath))
+                        _dbSizeFormatted = FormatBytes(new FileInfo(_dbPath).Length);
+                }
+            }
+            catch { /* 路徑解析失敗就顯示 — */ }
+
+            // Counts (single AsNoTracking pass each)
+            var pendingCount = await Db.ApprovalRequests
+                .AsNoTracking()
+                .CountAsync(r => r.Status == ApprovalStatus.Pending && r.ExpiresAt > DateTime.UtcNow);
+            _counts = new Counts(
+                Connections: await Db.Connections.CountAsync(),
+                Tasks: await Db.EtlTasks.CountAsync(),
+                EnabledTasks: await Db.EtlTasks.CountAsync(t => t.Enabled),
+                Runs: await Db.RunHistories.LongCountAsync(),
+                AuditEvents: await Db.AuditEvents.LongCountAsync(),
+                Users: await Db.Users.CountAsync(),
+                PendingApprovals: pendingCount);
+
+            // Retention policy snapshot
+            _retention = new Retention(
+                AuditDays: Config.GetValue<int?>("Audit:RetentionDays"),
+                AuditPerCategory: Config.GetValue<int?>("Audit:KeepLastPerCategory"),
+                RunDays: Config.GetValue<int?>("RunHistory:RetentionDays"),
+                RunPerTask: Config.GetValue<int?>("RunHistory:KeepLastPerTask"),
+                SessionMinutes: (Config.GetSection(EtlTool.App.Auth.AuthOptions.SectionName)
+                    .Get<EtlTool.App.Auth.AuthOptions>() ?? new EtlTool.App.Auth.AuthOptions())
+                    .ResolveTimeoutMinutes(),
+                MaxPasswordAgeDays: Config.GetValue<int?>($"{EtlTool.App.Auth.AuthOptions.SectionName}:MaxPasswordAgeDays") ?? 0);
+
+            _security = new Security(
+                WebhookUrl: Config["Webhooks:OnFailure"],
+                WebhookFormat: Config["Webhooks:Format"],
+                FailureStreakThreshold: Config.GetValue<int?>("Webhooks:FailureStreakThreshold") ?? 3);
+
+            // Audit chain head/tail
+            try
+            {
+                _chainHeadHash = await Db.AuditEvents
+                    .OrderBy(e => e.At).ThenBy(e => e.Id)
+                    .Select(e => e.Hash).FirstOrDefaultAsync();
+                _chainTailHash = await Db.AuditEvents
+                    .OrderByDescending(e => e.At).ThenByDescending(e => e.Id)
+                    .Select(e => e.Hash).FirstOrDefaultAsync();
+            }
+            catch { /* shrug */ }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
+    }
+
+    /// <summary>對 webhook URL 做最簡 mask：保留 protocol + host，path / token 部分以 *** 取代。</summary>
+    private static string MaskUrl(string url)
+    {
+        try
+        {
+            var u = new Uri(url);
+            return $"{u.Scheme}://{u.Host}{(u.IsDefaultPort ? "" : $":{u.Port}")}/***";
+        }
+        catch
+        {
+            return "***";
+        }
+    }
+}

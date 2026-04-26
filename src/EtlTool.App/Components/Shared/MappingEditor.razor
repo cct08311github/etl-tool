@@ -111,6 +111,23 @@
     </div>
 }
 
+@{
+    var piiCount = Mappings
+        .Where(m => !string.IsNullOrEmpty(m.SourceColumn))
+        .Count(m => EtlTool.Core.Engine.PiiDetector.Inspect(m.SourceColumn).Kind != EtlTool.Core.Engine.PiiDetector.PiiKind.None);
+}
+@if (piiCount > 0)
+{
+    <div class="alert alert-warning py-2 mb-2 small">
+        🔒 偵測到 <strong>@piiCount</strong> 個欄位可能含 PII（個人識別資料）。建議：
+        <ul class="mb-0 mt-1">
+            <li>在 Task 設定啟用 <code>MaskSamplePayload</code>（避免 RunHistory 留下原始值）</li>
+            <li>確認目標表加密 / 存取權限符合機關 governance</li>
+            <li>若不該搬此欄位，請移除映射</li>
+        </ul>
+    </div>
+}
+
 @if (Mappings.Count == 0)
 {
     <div class="text-muted small">尚未配置映射。請先選好來源/目標表後按「同名自動配對」，或手動新增。</div>
@@ -133,6 +150,12 @@ else
         <tbody>
         @foreach (var m in Mappings)
         {
+            var srcPii = string.IsNullOrEmpty(m.SourceColumn)
+                ? null
+                : EtlTool.Core.Engine.PiiDetector.Inspect(m.SourceColumn);
+            var tgtPii = string.IsNullOrEmpty(m.TargetColumn)
+                ? null
+                : EtlTool.Core.Engine.PiiDetector.Inspect(m.TargetColumn);
             <tr @key="m">
                 <td>
                     <select class="form-select form-select-sm" @bind="m.SourceColumn" @bind:after="NotifyChanged">
@@ -142,6 +165,12 @@ else
                             <option value="@c.Name">@c.Name (@c.DataType)</option>
                         }
                     </select>
+                    @if (srcPii is not null && srcPii.Kind != EtlTool.Core.Engine.PiiDetector.PiiKind.None)
+                    {
+                        <small class="badge bg-warning text-dark mt-1 d-inline-block" title="@srcPii.Reason">
+                            🔒 @EtlTool.Core.Engine.PiiDetector.KindLabel(srcPii.Kind)
+                        </small>
+                    }
                 </td>
                 <td>
                     <select class="form-select form-select-sm" @bind="m.TargetColumn" @bind:after="NotifyChanged">
@@ -151,6 +180,12 @@ else
                             <option value="@c.Name">@c.Name (@c.DataType)</option>
                         }
                     </select>
+                    @if (tgtPii is not null && tgtPii.Kind != EtlTool.Core.Engine.PiiDetector.PiiKind.None)
+                    {
+                        <small class="badge bg-warning text-dark mt-1 d-inline-block" title="@tgtPii.Reason">
+                            🔒 @EtlTool.Core.Engine.PiiDetector.KindLabel(tgtPii.Kind)
+                        </small>
+                    }
                 </td>
                 @if (ShowKeyColumn)
                 {
