@@ -88,14 +88,37 @@ public class DateTokenResolverTests
 
     // === 格式化字串 ===
     [Theory]
-    [InlineData("${TODAY:yyyyMMdd}",        "20260426")]
+    // 三種最常用的日期字串格式
+    [InlineData("${TODAY:yyyyMMdd}",        "20260426")]      // 緊湊式（無分隔符，常見於 DW DateKey）
+    [InlineData("${TODAY:yyyy-MM-dd}",      "2026-04-26")]    // ISO 8601（dash）
+    [InlineData("${TODAY:yyyy/MM/dd}",      "2026/04/26")]    // 斜線
     [InlineData("${YESTERDAY:yyyy-MM-dd}",  "2026-04-25")]
-    [InlineData("${MONTH_START:yyyyMM}",    "202604")]
+    [InlineData("${YESTERDAY:yyyy/MM/dd}",  "2026/04/25")]
+    [InlineData("${YESTERDAY:yyyyMMdd}",    "20260425")]
+    // 月份 / 季別字串
+    [InlineData("${MONTH_START:yyyyMM}",         "202604")]
+    [InlineData("${MONTH_START:yyyy-MM}",        "2026-04")]
     [InlineData("${LAST_QUARTER_END:yyyy/MM/dd}", "2026/03/31")]
+    // 含時分秒
+    [InlineData("${NOW:yyyy-MM-dd HH:mm:ss}",     "2026-04-26 14:35:07")]
+    [InlineData("${NOW:yyyyMMddHHmmss}",          "20260426143507")]
     public void Format_suffix_yields_string(string token, string expected)
     {
         var got = AsString(DateTokenResolver.TryResolve(token, Ref));
         Assert.Equal(expected, got);
+    }
+
+    [Theory]
+    // 確認 raw SQL 替換時，格式化字串會自動加單引號
+    [InlineData(DbProviderType.SqlServer, "${TODAY:yyyy-MM-dd}", "'2026-04-26'")]
+    [InlineData(DbProviderType.SqlServer, "${TODAY:yyyy/MM/dd}", "'2026/04/26'")]
+    [InlineData(DbProviderType.SqlServer, "${TODAY:yyyyMMdd}",   "'20260426'")]
+    [InlineData(DbProviderType.Oracle,    "${TODAY:yyyy-MM-dd}", "'2026-04-26'")]
+    [InlineData(DbProviderType.Oracle,    "${TODAY:yyyy/MM/dd}", "'2026/04/26'")]
+    public void Substitute_raw_format_quotes_string(DbProviderType provider, string token, string expected)
+    {
+        var got = DateTokenResolver.SubstituteRaw($"col = {token}", provider, Ref);
+        Assert.Contains(expected, got);
     }
 
     // === 非 token ===

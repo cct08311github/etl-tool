@@ -28,6 +28,20 @@ public class FilterCompilerTests
         Assert.Equal(30L, c.Parameters[0].Value);
     }
 
+    // 確認使用者直接在「值」欄位輸入日期字串，會被解析成 DateTime（給 ADO.NET 自動處理型別）
+    [Theory]
+    [InlineData("2026-04-26",          "ISO dash")]
+    [InlineData("2026/04/26",          "slash")]
+    [InlineData("2026-04-26 14:30:00", "ISO with time")]
+    [InlineData("2026/04/26 14:30",    "slash with time")]
+    public void Date_string_parsed_as_DateTime(string input, string _)
+    {
+        var node = new FilterCondition { Column = "T", Operator = FilterOperator.Gte, Value = input };
+        var c = new FilterCompiler(_conn).Compile(node);
+        Assert.Single(c.Parameters);
+        Assert.IsType<DateTime>(c.Parameters[0].Value);
+    }
+
     [Fact]
     public void Group_with_and_logic()
     {
