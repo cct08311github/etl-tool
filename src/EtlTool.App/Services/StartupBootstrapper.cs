@@ -1,8 +1,11 @@
+using EtlTool.App.Auth;
 using EtlTool.Core.Engine;
 using EtlTool.Core.Models;
 using EtlTool.Core.Scheduling;
 using EtlTool.Data;
+using EtlTool.Data.Repositories;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace EtlTool.App.Services;
 
@@ -27,6 +30,9 @@ public sealed class StartupBootstrapper : IHostedService
 
         // 補填 audit 鏈結：之前 hash chain 還沒上線就存在的 audit events
         await BackfillAuditHashesAsync(db, ct);
+
+        // RBAC bootstrap：Users 表空時，從 appsettings Auth 段建第一個 admin
+        await SeedDefaultAdminAsync(scope, db, ct);
 
         // Quartz host service 會稍後啟動，這裡先註冊好 jobs
         var scheduler = scope.ServiceProvider.GetRequiredService<SchedulerService>();
@@ -67,6 +73,53 @@ public sealed class StartupBootstrapper : IHostedService
 
         await db.SaveChangesAsync(ct);
         _log.LogInformation("Audit hash chain backfilled.");
+    }
+
+    private async Task SeedDefaultAdminAsync(IServiceScope scope, AppDbContext db, CancellationToken ct)
+    {
+        if (await db.Users.AnyAsync(ct))
+        {
+            _log.LogDebug("Users table non-empty; skip default admin seed.");
+            return;
+        }
+
+        var opts = scope.ServiceProvider.GetRequiredService<IOptions<AuthOptions>>().Value;
+        var username = string.IsNullOrWhiteSpace(opts.Username) ? "admin" : opts.Username;
+        string passwordHash;
+
+        if (!string.IsNullOrEmpty(opts.PasswordHash))
+        {
+            passwordHash = opts.PasswordHash;
+        }
+        else if (!string.IsNullOrEmpty(opts.Password))
+        {
+            passwordHash = UserAuthService.Hash(opts.Password);
+        }
+        else
+        {
+            passwordHash = UserAuthService.Hash(UserAuthService.DefaultDevPassword);
+            _log.LogWarning("[SECURITY] Seeded default admin '{Username}' with built-in default password '{Default}'. 請立即修改。",
+                username, UserAuthService.DefaultDevPassword);
+        }
+
+        var admin = new User
+        {
+            Username = username,
+            PasswordHash = passwordHash,
+            Role = UserRole.Admin,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Users.Add(admin);
+        await db.SaveChangesAsync(ct);
+
+        var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
+        await audit.LogAsync(AuditCategory.Auth, AuditAction.Create,
+            $"從 appsettings 啟動 seed 出第一個 Admin「{username}」",
+            targetType: nameof(User), targetId: admin.Id, targetName: username,
+            actor: "system", severity: AuditSeverity.Info, ct: ct);
+
+        _log.LogInformation("Seeded initial admin user: {Username}", username);
     }
 
     public async Task StopAsync(CancellationToken ct)

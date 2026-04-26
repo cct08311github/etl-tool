@@ -12,6 +12,7 @@ public class AppDbContext : DbContext
     public DbSet<ColumnMapping> ColumnMappings => Set<ColumnMapping>();
     public DbSet<RunHistory> RunHistories => Set<RunHistory>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<User> Users => Set<User>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -77,6 +78,16 @@ public class AppDbContext : DbContext
             e.HasIndex(x => new { x.Severity, x.At });
             e.Property(x => x.Hash).HasMaxLength(64);
             e.Property(x => x.PreviousHash).HasMaxLength(64);
+        });
+
+        b.Entity<User>(e =>
+        {
+            e.ToTable("Users");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Username).IsUnique();
+            e.Property(x => x.Username).HasMaxLength(100).IsRequired();
+            e.Property(x => x.PasswordHash).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Role).HasConversion<int>();
         });
     }
 }

@@ -55,7 +55,8 @@ public class LoginModel : PageModel
             return Page();
         }
 
-        if (!_auth.Validate(Username, Password))
+        var validatedUser = await _auth.ValidateAsync(Username, Password);
+        if (validatedUser is null)
         {
             var (fails, justLocked) = _lockout.RecordFailure(Username);
 
@@ -86,8 +87,9 @@ public class LoginModel : PageModel
 
         var claims = new List<Claim>
         {
-            new(ClaimTypes.Name, Username),
-            new(ClaimTypes.NameIdentifier, Username),
+            new(ClaimTypes.Name, validatedUser.Username),
+            new(ClaimTypes.NameIdentifier, validatedUser.Id.ToString()),
+            new(ClaimTypes.Role, validatedUser.Role.ToString()),
         };
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         var principal = new ClaimsPrincipal(identity);
@@ -97,7 +99,9 @@ public class LoginModel : PageModel
             ExpiresUtc = DateTimeOffset.UtcNow.AddHours(_auth.CurrentOptions.SessionHours),
         };
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, props);
-        await _audit.LogAsync(AuditCategory.Auth, AuditAction.Login, $"使用者「{Username}」登入", actor: Username);
+        await _audit.LogAsync(AuditCategory.Auth, AuditAction.Login,
+            $"使用者「{validatedUser.Username}」({validatedUser.Role}) 登入",
+            actor: validatedUser.Username);
 
         return LocalRedirect(SafeReturnUrl());
     }

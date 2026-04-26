@@ -21,6 +21,13 @@
     <NavLink class="nav-item" href="logs">
         <Icon Name="history" /><span>活動日誌</span>
     </NavLink>
+    <AuthorizeView Roles="Admin">
+        <Authorized>
+            <NavLink class="nav-item" href="users">
+                <Icon Name="settings" /><span>使用者管理</span>
+            </NavLink>
+        </Authorized>
+    </AuthorizeView>
 </nav>
 
 <div class="nav-footer">
@@ -30,6 +37,9 @@
                 <div class="user-avatar">@(context.User.Identity?.Name?.Substring(0, 1).ToUpper() ?? "?")</div>
                 <div class="user-info">
                     <div class="user-name">@context.User.Identity?.Name</div>
+                    <div class="small text-muted" style="font-size: 0.6875rem">
+                        @(context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? "—")
+                    </div>
                     <a class="user-logout" href="/Account/Logout">登出</a>
                 </div>
             </div>

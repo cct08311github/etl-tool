@@ -1,0 +1,268 @@
+@page "/users"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+@inject EtlTool.Data.Repositories.UserRepository UserRepo
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>使用者管理</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">使用者管理</h1>
+    <button class="btn btn-primary" @onclick="OpenCreate">
+        <Icon Name="plus" /> 新增使用者
+    </button>
+</div>
+
+@if (_users is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_users.Count == 0)
+{
+    <div class="empty-state">
+        <h3>尚無使用者</h3>
+        <p>新增第一個使用者以啟用 RBAC。</p>
+    </div>
+}
+else
+{
+    <div class="card">
+    <table class="table mb-0 align-middle">
+        <thead>
+            <tr>
+                <th>帳號</th>
+                <th>角色</th>
+                <th>狀態</th>
+                <th>建立</th>
+                <th>上次登入</th>
+                <th class="text-end">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var u in _users)
+        {
+            <tr>
+                <td><strong>@u.Username</strong></td>
+                <td>
+                    <select class="form-select form-select-sm" style="width: auto"
+                            value="@u.Role"
+                            @onchange="e => OnRoleChange(u, e)">
+                        @foreach (var r in Enum.GetValues<UserRole>())
+                        {
+                            <option value="@r">@r</option>
+                        }
+                    </select>
+                </td>
+                <td>
+                    <div class="form-check form-switch m-0">
+                        <input type="checkbox" class="form-check-input" checked="@u.IsActive"
+                               @onchange="e => OnActiveChange(u, (bool)e.Value!)" />
+                    </div>
+                </td>
+                <td class="small text-muted">@u.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd")</td>
+                <td class="small text-muted">
+                    @(u.LastLoginAt?.ToLocalTime().ToString("MM-dd HH:mm") ?? "—")
+                </td>
+                <td class="text-end">
+                    <div class="row-actions">
+                        <button class="icon-btn" title="重設密碼" @onclick="() => OpenReset(u)">
+                            <Icon Name="settings" />
+                        </button>
+                        <button class="icon-btn icon-btn-danger" title="刪除"
+                                @onclick="() => Delete(u)" disabled="@IsSelf(u)">
+                            <Icon Name="trash" />
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    </div>
+}
+
+@if (_message is not null)
+{
+    <div class="alert alert-info mt-3">@_message</div>
+}
+
+@* 新增 / 重設密碼 modal *@
+@if (_showCreate)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">新增使用者</h5></div>
+                <div class="modal-body">
+                    <div class="mb-2">
+                        <label class="form-label">帳號</label>
+                        <input class="form-control" @bind="_newUsername" autocomplete="off" />
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">初始密碼</label>
+                        <input type="password" class="form-control" @bind="_newPassword" autocomplete="new-password" />
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">角色</label>
+                        <select class="form-select" @bind="_newRole">
+                            @foreach (var r in Enum.GetValues<UserRole>())
+                            {
+                                <option value="@r">@r</option>
+                            }
+                        </select>
+                    </div>
+                    @if (_modalError is not null) { <div class="alert alert-danger">@_modalError</div> }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showCreate = false">取消</button>
+                    <button class="btn btn-primary" @onclick="ConfirmCreate">建立</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showReset)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">重設密碼 — @_resetTargetName</h5></div>
+                <div class="modal-body">
+                    <label class="form-label">新密碼</label>
+                    <input type="password" class="form-control" @bind="_newPassword" autocomplete="new-password" />
+                    @if (_modalError is not null) { <div class="alert alert-danger mt-2">@_modalError</div> }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showReset = false">取消</button>
+                    <button class="btn btn-primary" @onclick="ConfirmReset">重設</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<EtlTool.Core.Models.User>? _users;
+    private string? _currentUsername;
+    private string? _message;
+
+    private bool _showCreate;
+    private bool _showReset;
+    private string _newUsername = "";
+    private string _newPassword = "";
+    private UserRole _newRole = UserRole.Operator;
+    private Guid _resetTargetId;
+    private string? _resetTargetName;
+    private string? _modalError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _currentUsername = state.User.Identity?.Name;
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        _users = await UserRepo.ListAsync(CancellationToken.None);
+        StateHasChanged();
+    }
+
+    private bool IsSelf(EtlTool.Core.Models.User u)
+        => string.Equals(u.Username, _currentUsername, StringComparison.Ordinal);
+
+    private void OpenCreate()
+    {
+        _newUsername = "";
+        _newPassword = "";
+        _newRole = UserRole.Operator;
+        _modalError = null;
+        _showCreate = true;
+    }
+
+    private async Task ConfirmCreate()
+    {
+        _modalError = null;
+        if (string.IsNullOrWhiteSpace(_newUsername) || string.IsNullOrWhiteSpace(_newPassword))
+        {
+            _modalError = "帳號和密碼皆必填";
+            return;
+        }
+        if (_newPassword.Length < 8)
+        {
+            _modalError = "密碼至少 8 字";
+            return;
+        }
+        try
+        {
+            var u = new EtlTool.Core.Models.User
+            {
+                Username = _newUsername.Trim(),
+                PasswordHash = EtlTool.App.Auth.UserAuthService.Hash(_newPassword),
+                Role = _newRole,
+                IsActive = true,
+            };
+            await UserRepo.CreateAsync(u, _currentUsername ?? "admin", CancellationToken.None);
+            _showCreate = false;
+            _message = $"已建立使用者「{u.Username}」";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _modalError = $"建立失敗：{ex.Message}";
+        }
+    }
+
+    private void OpenReset(EtlTool.Core.Models.User u)
+    {
+        _resetTargetId = u.Id;
+        _resetTargetName = u.Username;
+        _newPassword = "";
+        _modalError = null;
+        _showReset = true;
+    }
+
+    private async Task ConfirmReset()
+    {
+        if (string.IsNullOrWhiteSpace(_newPassword) || _newPassword.Length < 8)
+        {
+            _modalError = "密碼至少 8 字";
+            return;
+        }
+        try
+        {
+            await UserRepo.ResetPasswordAsync(_resetTargetId,
+                EtlTool.App.Auth.UserAuthService.Hash(_newPassword),
+                _currentUsername ?? "admin", CancellationToken.None);
+            _showReset = false;
+            _message = $"已重設「{_resetTargetName}」密碼";
+        }
+        catch (Exception ex)
+        {
+            _modalError = $"失敗：{ex.Message}";
+        }
+    }
+
+    private async Task OnRoleChange(EtlTool.Core.Models.User u, ChangeEventArgs e)
+    {
+        if (Enum.TryParse<UserRole>(e.Value as string, out var newRole) && newRole != u.Role)
+        {
+            await UserRepo.UpdateAsync(u.Id, newRole, u.IsActive, _currentUsername ?? "admin", CancellationToken.None);
+            await Reload();
+        }
+    }
+
+    private async Task OnActiveChange(EtlTool.Core.Models.User u, bool active)
+    {
+        await UserRepo.UpdateAsync(u.Id, u.Role, active, _currentUsername ?? "admin", CancellationToken.None);
+        await Reload();
+    }
+
+    private async Task Delete(EtlTool.Core.Models.User u)
+    {
+        if (IsSelf(u)) return;
+        await UserRepo.DeleteAsync(u.Id, _currentUsername ?? "admin", CancellationToken.None);
+        await Reload();
+    }
+}
