@@ -117,7 +117,23 @@ builder.Services.AddScoped<EtlJob>();
 builder.Services.AddSingleton<SchedulerKillSwitch>();
 builder.Services.Configure<MaintenanceWindowsOptions>(builder.Configuration.GetSection("Maintenance"));
 builder.Services.AddHttpClient();
-builder.Services.AddSingleton<IFailureNotifier, HttpFailureNotifier>();
+// Streak-aware decorator wraps HTTP webhook：
+//   - 預設 3 連敗才打 webhook（避免 alert fatigue）
+//   - 從 alert 狀態恢復成功 → 也打一筆「[RECOVERY]」訊息
+// 可透過 Webhooks:FailureStreakThreshold 調整。
+builder.Services.AddSingleton<HttpFailureNotifier>();
+builder.Services.AddSingleton<IFailureNotifier>(sp =>
+{
+    var inner = sp.GetRequiredService<HttpFailureNotifier>();
+    var threshold = builder.Configuration.GetValue<int?>("Webhooks:FailureStreakThreshold") ?? 3;
+    var recovery = builder.Configuration.GetValue<bool?>("Webhooks:NotifyRecovery") ?? true;
+    if (threshold <= 1)
+    {
+        // threshold=1 等於每次失敗都通知；不需要 streak wrapper，直接用 inner
+        return inner;
+    }
+    return new StreakAwareFailureNotifier(inner, threshold, recovery);
+});
 
 // Quartz
 builder.Services.AddQuartz(q => { q.SchedulerName = "EtlTool"; });

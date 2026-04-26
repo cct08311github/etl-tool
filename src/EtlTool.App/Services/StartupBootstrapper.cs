@@ -34,11 +34,20 @@ public sealed class StartupBootstrapper : IHostedService
         // RBAC bootstrap：Users 表空時，從 appsettings Auth 段建第一個 admin
         await SeedDefaultAdminAsync(scope, db, ct);
 
+        // Data Protection keys 目錄權限檢查（POSIX）— 防止連線字串解密金鑰被同機其他 user 讀取
+        var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
+        var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+        var hostEnv = scope.ServiceProvider.GetRequiredService<IHostEnvironment>();
+        var dataDir = config["DataDirectory"]
+                      ?? Environment.GetEnvironmentVariable("ETLTOOL_DATA_DIR")
+                      ?? Path.Combine(hostEnv.ContentRootPath, "data");
+        var keysDir = Path.Combine(dataDir, "keys");
+        await DataDirPermissionCheck.RunAndAuditAsync(keysDir, audit, _log, ct);
+
         // Quartz host service 會稍後啟動，這裡先註冊好 jobs
         var scheduler = scope.ServiceProvider.GetRequiredService<SchedulerService>();
         await scheduler.InitializeAsync(ct);
 
-        var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
         await audit.LogAsync(AuditCategory.System, AuditAction.SystemStart,
             "系統啟動完成", ct: ct);
     }

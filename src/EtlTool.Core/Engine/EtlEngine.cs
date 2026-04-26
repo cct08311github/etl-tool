@@ -205,6 +205,12 @@ public sealed class EtlEngine
                         targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
                         detailsJson: System.Text.Json.JsonSerializer.Serialize(new { runId = run.Id, rowsRead, rowsWritten }),
                         ct: CancellationToken.None);
+
+                // Notify streak-aware notifier of success → 若先前在 streak 中會觸發 recovery 通知
+                if (_failureNotifier is not null)
+                {
+                    _ = Task.Run(() => _failureNotifier.NotifyRunOutcomeAsync(task, run, CancellationToken.None));
+                }
                 return run;
             }
             catch
@@ -247,10 +253,10 @@ public sealed class EtlEngine
                     detailsJson: System.Text.Json.JsonSerializer.Serialize(new { runId = run.Id, error = ex.GetType().Name }),
                     ct: CancellationToken.None);
 
-            // Failure webhook（fire-and-forget；webhook 自身錯誤已在 notifier 內 swallow）
+            // Failure webhook 走 outcome 路徑 — streak-aware 會吃掉非門檻次數，避免 alert fatigue
             if (_failureNotifier is not null)
             {
-                _ = Task.Run(() => _failureNotifier.NotifyFailureAsync(task, run, CancellationToken.None));
+                _ = Task.Run(() => _failureNotifier.NotifyRunOutcomeAsync(task, run, CancellationToken.None));
             }
 
             return run;

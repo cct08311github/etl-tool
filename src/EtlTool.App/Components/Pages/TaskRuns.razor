@@ -10,6 +10,48 @@
     <a class="btn btn-outline-secondary" href="tasks">← 返回任務列表</a>
 </div>
 
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label small mb-1">狀態</label>
+                <select class="form-select form-select-sm" @bind="_filterStatus" @bind:after="ApplyFilter">
+                    <option value="">全部</option>
+                    <option value="Success">Success</option>
+                    <option value="Failed">Failed</option>
+                    <option value="Running">Running</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">起 (本機時間)</label>
+                <input type="date" class="form-control form-control-sm" @bind="_filterFrom" @bind:after="ApplyFilter" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">迄 (本機時間)</label>
+                <input type="date" class="form-control form-control-sm" @bind="_filterTo" @bind:after="ApplyFilter" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">觸發類型</label>
+                <select class="form-select form-select-sm" @bind="_filterTrigger" @bind:after="ApplyFilter">
+                    <option value="">全部</option>
+                    <option value="Scheduled">Scheduled</option>
+                    <option value="Manual">Manual</option>
+                    <option value="Retry">Retry</option>
+                </select>
+            </div>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-2">
+            <small class="text-muted">
+                顯示 @(_filtered?.Count ?? 0) / @(_runs?.Count ?? 0) 筆
+            </small>
+            @if (HasActiveFilter)
+            {
+                <button class="btn btn-sm btn-link p-0" @onclick="ClearFilter">清除篩選</button>
+            }
+        </div>
+    </div>
+</div>
+
 @if (_runs is null)
 {
     <p class="text-muted">載入中…</p>
@@ -19,6 +61,13 @@ else if (_runs.Count == 0)
     <div class="empty-state">
         <h3>尚無執行紀錄</h3>
         <p>從任務列表按「立即執行」或等排程觸發後，這裡會顯示每次的詳細結果。</p>
+    </div>
+}
+else if (_filtered is null || _filtered.Count == 0)
+{
+    <div class="empty-state">
+        <p>篩選條件下無相符紀錄。</p>
+        <button class="btn btn-link" @onclick="ClearFilter">清除篩選</button>
     </div>
 }
 else
@@ -38,7 +87,7 @@ else
             </tr>
         </thead>
         <tbody>
-        @foreach (var r in _runs)
+        @foreach (var r in _filtered)
         {
             <tr>
                 <td><span class="font-monospace small">@r.StartedAt.ToLocalTime().ToString("MM-dd HH:mm:ss")</span></td>
@@ -61,7 +110,19 @@ else
 @code {
     [Parameter] public Guid Id { get; set; }
     private List<EtlTool.Core.Models.RunHistory>? _runs;
+    private List<EtlTool.Core.Models.RunHistory>? _filtered;
     private string? _taskName;
+
+    private string _filterStatus = "";
+    private string _filterTrigger = "";
+    private DateTime? _filterFrom;
+    private DateTime? _filterTo;
+
+    private bool HasActiveFilter =>
+        !string.IsNullOrEmpty(_filterStatus) ||
+        !string.IsNullOrEmpty(_filterTrigger) ||
+        _filterFrom.HasValue ||
+        _filterTo.HasValue;
 
     protected override async Task OnInitializedAsync()
     {
@@ -69,5 +130,38 @@ else
         _runs = await RunRepo.ListByTaskAsync(Id, 100, ct);
         var task = await TaskRepo.GetWithMappingsAsync(Id, ct);
         _taskName = task?.Name;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        if (_runs is null) { _filtered = null; return; }
+        IEnumerable<EtlTool.Core.Models.RunHistory> q = _runs;
+
+        if (Enum.TryParse<RunStatus>(_filterStatus, out var status))
+            q = q.Where(r => r.Status == status);
+        if (Enum.TryParse<TriggerType>(_filterTrigger, out var trigger))
+            q = q.Where(r => r.TriggerType == trigger);
+        if (_filterFrom.HasValue)
+        {
+            // local-date 起算 → UTC
+            var fromUtc = _filterFrom.Value.Date.ToUniversalTime();
+            q = q.Where(r => r.StartedAt >= fromUtc);
+        }
+        if (_filterTo.HasValue)
+        {
+            var toUtc = _filterTo.Value.Date.AddDays(1).AddTicks(-1).ToUniversalTime();
+            q = q.Where(r => r.StartedAt <= toUtc);
+        }
+        _filtered = q.ToList();
+    }
+
+    private void ClearFilter()
+    {
+        _filterStatus = "";
+        _filterTrigger = "";
+        _filterFrom = null;
+        _filterTo = null;
+        ApplyFilter();
     }
 }
