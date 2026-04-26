@@ -15,6 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<EntityChangeHistory> EntityChangeHistories => Set<EntityChangeHistory>();
+    public DbSet<PasswordHistory> PasswordHistories => Set<PasswordHistory>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -90,6 +91,14 @@ public class AppDbContext : DbContext
             e.Property(x => x.Username).HasMaxLength(100).IsRequired();
             e.Property(x => x.PasswordHash).HasMaxLength(200).IsRequired();
             e.Property(x => x.Role).HasConversion<int>();
+        });
+
+        b.Entity<PasswordHistory>(e =>
+        {
+            e.ToTable("PasswordHistories");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.PasswordHash).HasMaxLength(200).IsRequired();
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
         });
 
         b.Entity<ApprovalRequest>(e =>

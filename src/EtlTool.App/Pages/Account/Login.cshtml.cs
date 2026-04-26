@@ -93,17 +93,36 @@ public class LoginModel : PageModel
         };
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
         var principal = new ClaimsPrincipal(identity);
+
+        // 用新的 ResolveTimeoutMinutes()（取代被棄用的 SessionHours）
+        var timeoutMinutes = _auth.CurrentOptions.ResolveTimeoutMinutes();
         var props = new AuthenticationProperties
         {
             IsPersistent = false,
-            ExpiresUtc = DateTimeOffset.UtcNow.AddHours(_auth.CurrentOptions.SessionHours),
+            ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(timeoutMinutes),
         };
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, props);
         await _audit.LogAsync(AuditCategory.Auth, AuditAction.Login,
             $"使用者「{validatedUser.Username}」({validatedUser.Role}) 登入",
             actor: validatedUser.Username);
 
+        // 銀行控制：若 user 被標記必須變更密碼（首次登入或 admin 重設後，
+        // 或達 MaxPasswordAgeDays 過期）→ 強制導向 ChangePassword 頁
+        var mustChange = validatedUser.MustChangePassword
+            || IsPasswordExpired(validatedUser);
+        if (mustChange)
+        {
+            return Redirect("/Account/ChangePassword?returnUrl=" + Uri.EscapeDataString(SafeReturnUrl()));
+        }
+
         return LocalRedirect(SafeReturnUrl());
+    }
+
+    private bool IsPasswordExpired(User u)
+    {
+        var maxAge = _auth.CurrentOptions.MaxPasswordAgeDays;
+        if (maxAge <= 0) return false;
+        return DateTime.UtcNow - u.LastPasswordChangedAt > TimeSpan.FromDays(maxAge);
     }
 
     private string SafeReturnUrl()

@@ -35,4 +35,14 @@ public sealed class AuthOptions
         if (SessionHours > 0) return Math.Min(SessionHours * 60, 480);
         return 30;
     }
+
+    /// <summary>
+    /// 密碼最大年齡（天）。超過後強制變更（user 下次登入會被導向 ChangePassword）。
+    /// 0 或未設 = 不啟用（不強制 rotation）。
+    /// 銀行常見：90 天 (PCI-DSS) 或 180 天。
+    /// </summary>
+    public int MaxPasswordAgeDays { get; set; } = 0;
+
+    /// <summary>到期前 N 天開始顯示警告 banner（給 user 提前換）。預設 14 天。</summary>
+    public int PasswordExpiryWarnDays { get; set; } = 14;
 }

@@ -3,8 +3,10 @@
 @inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Data.Repositories.UserRepository UserRepo
 @inject EtlTool.Data.Repositories.AuditChainVerifier ChainVerifier
 @inject EtlTool.Core.Scheduling.SchedulerKillSwitch KillSwitch
+@inject EtlTool.App.Auth.UserAuthService AuthSvc
 @inject AuthenticationStateProvider AuthState
 
 <PageTitle>Dashboard</PageTitle>
@@ -24,6 +26,16 @@
         </button>
     }
 </div>
+
+@if (_passwordWarn is not null)
+{
+    <div class="alert @(_passwordWarn.IsCritical ? "alert-danger" : "alert-warning") mb-3">
+        <Icon Name="alert-triangle" />
+        <strong class="ms-2">@_passwordWarn.Title</strong>
+        — @_passwordWarn.Detail
+        <a href="/Account/ChangePassword" class="ms-2 fw-medium">立即變更</a>
+    </div>
+}
 
 @if (KillSwitch.IsPaused)
 {
@@ -198,6 +210,9 @@ else
     private bool _chainBusy;
     private static readonly TimeSpan ChainCacheTtl = TimeSpan.FromMinutes(5);
 
+    private record PasswordExpiryWarn(string Title, string Detail, bool IsCritical);
+    private PasswordExpiryWarn? _passwordWarn;
+
     protected override async Task OnInitializedAsync()
     {
         var ct = CancellationToken.None;
@@ -217,6 +232,9 @@ else
         _recentRuns = runs.Take(15).ToList();
 
         _loading = false;
+
+        // 密碼到期警示（若 Auth:MaxPasswordAgeDays 啟用）
+        await CheckPasswordExpiryAsync();
 
         // Audit chain：admin 才跑；用 5 分鐘 cache，避免每次 dashboard 進來都全表 SHA-256
         var state = await AuthState.GetAuthenticationStateAsync();
@@ -263,6 +281,44 @@ else
         if (diff.TotalSeconds < 60) return "剛剛驗證";
         if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes} 分鐘前驗證";
         return $"{(int)diff.TotalHours} 小時前驗證";
+    }
+
+    private async Task CheckPasswordExpiryAsync()
+    {
+        try
+        {
+            var opts = AuthSvc.CurrentOptions;
+            if (opts.MaxPasswordAgeDays <= 0) return;
+
+            var state = await AuthState.GetAuthenticationStateAsync();
+            var username = state.User.Identity?.Name;
+            if (string.IsNullOrEmpty(username)) return;
+
+            var u = await UserRepo.FindByUsernameAsync(username, CancellationToken.None);
+            if (u is null) return;
+
+            var ageDays = (int)(DateTime.UtcNow - u.LastPasswordChangedAt).TotalDays;
+            var remaining = opts.MaxPasswordAgeDays - ageDays;
+
+            if (remaining <= 0)
+            {
+                _passwordWarn = new PasswordExpiryWarn(
+                    "密碼已到期",
+                    $"已 {ageDays} 天未變更（上限 {opts.MaxPasswordAgeDays} 天），請立即變更",
+                    IsCritical: true);
+            }
+            else if (remaining <= opts.PasswordExpiryWarnDays)
+            {
+                _passwordWarn = new PasswordExpiryWarn(
+                    "密碼即將到期",
+                    $"還剩 {remaining} 天到期（已使用 {ageDays} 天）",
+                    IsCritical: false);
+            }
+        }
+        catch
+        {
+            // 顯示錯誤不影響 dashboard，靜默
+        }
     }
 
     private async Task ConfirmPause()
