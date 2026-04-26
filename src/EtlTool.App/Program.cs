@@ -98,6 +98,7 @@ builder.Services.AddScoped<EtlTaskRepository>();
 builder.Services.AddScoped<RunHistoryRepository>();
 builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<ApprovalRepository>();
+builder.Services.AddScoped<EntityChangeHistoryRepository>();
 builder.Services.AddScoped<AuditQueryRepository>();
 builder.Services.AddScoped<AuditChainVerifier>();
 builder.Services.AddSingleton<IAuditLogger, AuditLogger>();
@@ -139,6 +140,10 @@ builder.Services.AddSingleton(builder.Configuration.GetSection("Auth:Lockout").G
 builder.Services.AddSingleton<LoginLockoutService>();
 builder.Services.AddCascadingAuthenticationState();
 
+// 讀 Auth 設定來決定 cookie ExpireTimeSpan（銀行預設 30 分鐘無操作即逾時）
+var authOptsForCookie = builder.Configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>() ?? new AuthOptions();
+var sessionTimeoutMinutes = authOptsForCookie.ResolveTimeoutMinutes();
+
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
@@ -146,7 +151,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.LogoutPath = "/Account/Logout";
         options.AccessDeniedPath = "/Account/Login";
         options.SlidingExpiration = true;
-        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.ExpireTimeSpan = TimeSpan.FromMinutes(sessionTimeoutMinutes);
         options.Cookie.Name = "EtlTool.Auth";
         options.Cookie.HttpOnly = true;
         options.Cookie.SameSite = SameSiteMode.Lax;

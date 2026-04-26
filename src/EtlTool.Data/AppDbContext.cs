@@ -14,6 +14,7 @@ public class AppDbContext : DbContext
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<User> Users => Set<User>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
+    public DbSet<EntityChangeHistory> EntityChangeHistories => Set<EntityChangeHistory>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -105,6 +106,19 @@ public class AppDbContext : DbContext
             e.Property(x => x.DecisionReason).HasMaxLength(500);
             e.HasIndex(x => x.Status);
             e.HasIndex(x => new { x.TargetType, x.TargetId, x.Status });
+        });
+
+        b.Entity<EntityChangeHistory>(e =>
+        {
+            e.ToTable("EntityChangeHistories");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.EntityType).HasMaxLength(50).IsRequired();
+            e.Property(x => x.EntityName).HasMaxLength(200);
+            e.Property(x => x.ChangedBy).HasMaxLength(100);
+            e.Property(x => x.Action).HasConversion<int>();
+            e.Property(x => x.Summary).HasMaxLength(2000);
+            e.HasIndex(x => new { x.EntityType, x.EntityId, x.ChangedAt });
+            e.HasIndex(x => x.ChangedAt);
         });
     }
 }

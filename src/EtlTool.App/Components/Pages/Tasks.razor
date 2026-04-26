@@ -191,7 +191,7 @@ else
         var full = await TaskRepo.GetWithMappingsAsync(task.Id, CancellationToken.None);
         if (full is null) return;
         full.Enabled = enabled;
-        await TaskRepo.UpdateAsync(full, CancellationToken.None);
+        await TaskRepo.UpdateAsync(full, CancellationToken.None, actor: _currentUsername);
         await Scheduler.RescheduleAsync(task.Id, CancellationToken.None);
         await Reload();
     }

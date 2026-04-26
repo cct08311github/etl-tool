@@ -8,10 +8,19 @@
 @inject EtlTool.Core.Scheduling.SchedulerService Scheduler
 @inject EtlTool.Core.Engine.EtlEngine EtlEngine
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthState
 
 <PageTitle>編輯任務</PageTitle>
 
-<h1>@(Id is null ? "新增任務" : "編輯任務")</h1>
+<div class="d-flex justify-content-between align-items-center">
+    <h1 class="m-0">@(Id is null ? "新增任務" : "編輯任務")</h1>
+    @if (Id is not null)
+    {
+        <a class="btn btn-outline-secondary btn-sm" href="@($"tasks/{Id}/history")">
+            <Icon Name="history" /> 變更歷史
+        </a>
+    }
+</div>
 
 @if (_task is null || _connections is null)
 {
@@ -475,9 +484,13 @@ else
     private List<Dictionary<string, object?>>? _dryRunRows;
     private string? _dryRunError;
 
+    private string? _currentUsername;
+
     protected override async Task OnInitializedAsync()
     {
         var ct = CancellationToken.None;
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _currentUsername = state.User.Identity?.Name;
         _connections = await ConnRepo.ListAsync(ct);
         if (Id is null)
         {
@@ -664,11 +677,11 @@ else
             EtlTool.Core.Models.EtlTask saved;
             if (Id is null)
             {
-                saved = await TaskRepo.CreateAsync(_task, CancellationToken.None);
+                saved = await TaskRepo.CreateAsync(_task, CancellationToken.None, actor: _currentUsername);
             }
             else
             {
-                saved = await TaskRepo.UpdateAsync(_task, CancellationToken.None);
+                saved = await TaskRepo.UpdateAsync(_task, CancellationToken.None, actor: _currentUsername);
             }
             await Scheduler.RescheduleAsync(saved.Id, CancellationToken.None);
             Nav.NavigateTo("tasks");

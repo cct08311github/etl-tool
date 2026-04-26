@@ -222,12 +222,12 @@ else
             switch (req.Action)
             {
                 case ApprovalAction.DeleteConnection:
-                    await ConnRepo.DeleteAsync(req.TargetId, CancellationToken.None);
+                    await ConnRepo.DeleteAsync(req.TargetId, CancellationToken.None, actor: _currentUsername);
                     break;
 
                 case ApprovalAction.DeleteTask:
                     await Scheduler.UnscheduleAsync(req.TargetId, CancellationToken.None);
-                    await TaskRepo.DeleteAsync(req.TargetId, CancellationToken.None);
+                    await TaskRepo.DeleteAsync(req.TargetId, CancellationToken.None, actor: _currentUsername);
                     break;
             }
 

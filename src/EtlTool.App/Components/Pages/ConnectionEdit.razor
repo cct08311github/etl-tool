@@ -6,10 +6,19 @@
 @inject EtlTool.Core.Connectors.IConnectionStringProtector Protector
 @inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthState
 
 <PageTitle>連線編輯</PageTitle>
 
-<h1>@(Id is null ? "新增連線" : "編輯連線")</h1>
+<div class="d-flex justify-content-between align-items-center">
+    <h1 class="m-0">@(Id is null ? "新增連線" : "編輯連線")</h1>
+    @if (Id is not null)
+    {
+        <a class="btn btn-outline-secondary btn-sm" href="@($"connections/{Id}/history")">
+            <Icon Name="history" /> 變更歷史
+        </a>
+    }
+</div>
 
 @if (_form is null)
 {
@@ -148,12 +157,15 @@ else
     private bool _advancedMode;
     private string? _message;
     private bool _isError;
+    private string? _currentUsername;
 
     private EtlTool.Connectors.OracleParts _ora = EtlTool.Connectors.ConnectionStringHelper.DefaultOracle();
     private EtlTool.Connectors.SqlServerParts _sql = EtlTool.Connectors.ConnectionStringHelper.DefaultSqlServer();
 
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _currentUsername = state.User.Identity?.Name;
         if (Id is null)
         {
             _form = new FormModel();
@@ -216,7 +228,7 @@ else
                     _isError = true; _message = "請填入連線資訊。";
                     return;
                 }
-                await ConnRepo.CreateAsync(_form.Name, _form.ProviderType, _form.ConnectionString, Protector, CancellationToken.None);
+                await ConnRepo.CreateAsync(_form.Name, _form.ProviderType, _form.ConnectionString, Protector, CancellationToken.None, actor: _currentUsername);
             }
             else
             {
@@ -248,7 +260,7 @@ else
                     newCs = EtlTool.Connectors.ConnectionStringHelper.Build(_form.ProviderType, _ora, _sql);
                 }
 
-                await ConnRepo.UpdateAsync(Id.Value, _form.Name, _form.ProviderType, newCs, Protector, CancellationToken.None);
+                await ConnRepo.UpdateAsync(Id.Value, _form.Name, _form.ProviderType, newCs, Protector, CancellationToken.None, actor: _currentUsername);
             }
             Nav.NavigateTo("connections");
         }

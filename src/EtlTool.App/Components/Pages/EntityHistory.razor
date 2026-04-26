@@ -1,0 +1,174 @@
+@page "/tasks/{Id:guid}/history"
+@page "/connections/{Id:guid}/history"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin,Operator")]
+@using EtlTool.Data.Repositories
+@inject EtlTool.Data.Repositories.EntityChangeHistoryRepository HistoryRepo
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject NavigationManager Nav
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+}
+
+@{
+    // 由路徑判斷實體類型
+    var path = new Uri(Nav.Uri).AbsolutePath;
+    var isTask = path.Contains("/tasks/");
+    var entityType = isTask ? EntityChangeHistoryRepository.EtlTaskEntityType : EntityChangeHistoryRepository.ConnectionEntityType;
+    var typeLabel = isTask ? "ETL 任務" : "連線";
+    var backUrl = isTask ? $"tasks/{Id}" : $"connections/{Id}";
+}
+
+<PageTitle>@typeLabel 變更歷史</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">
+        @typeLabel 變更歷史
+        @if (_entityName is not null) { <small class="text-muted">— @_entityName</small> }
+    </h1>
+    <div>
+        <a class="btn btn-outline-secondary btn-sm" href="@backUrl"><Icon Name="arrow-left" /> 回編輯</a>
+    </div>
+</div>
+
+<div class="alert alert-secondary">
+    每次新建 / 修改 / 刪除都會記錄一筆，含「誰、何時、改了什麼」與完整 JSON 快照。
+    可用於故障排查、稽核回查、回復前一版設定（手動參考 BeforeJson 內容輸入）。
+</div>
+
+@if (_history is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_history.Count == 0)
+{
+    <div class="empty-state">
+        <p class="m-0">尚無變更紀錄。</p>
+    </div>
+}
+else
+{
+    <div class="card">
+    <table class="table mb-0 align-middle">
+        <thead>
+            <tr>
+                <th style="width: 1%"></th>
+                <th>時間</th>
+                <th>動作</th>
+                <th>變更者</th>
+                <th>變更摘要</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var h in _history)
+        {
+            <tr>
+                <td>
+                    <button class="icon-btn" @onclick="() => ToggleExpand(h.Id)">
+                        <Icon Name="@(_expanded.Contains(h.Id) ? "chevron-down" : "chevron-right")" />
+                    </button>
+                </td>
+                <td class="small text-muted">@h.ChangedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@ActionBadge(h.Action)</td>
+                <td>@h.ChangedBy</td>
+                <td class="small">
+                    @(string.IsNullOrEmpty(h.Summary) ? "—" : h.Summary)
+                </td>
+            </tr>
+            @if (_expanded.Contains(h.Id))
+            {
+                <tr>
+                    <td colspan="5" class="bg-light">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <div class="small text-muted mb-1">Before（變更前）</div>
+                                <pre class="small mb-0" style="max-height: 360px; overflow: auto; background: #fff; padding: 0.5rem; border: 1px solid #dee2e6;"><code>@(PrettyJson(h.BeforeJson))</code></pre>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="small text-muted mb-1">After（變更後）</div>
+                                <pre class="small mb-0" style="max-height: 360px; overflow: auto; background: #fff; padding: 0.5rem; border: 1px solid #dee2e6;"><code>@(PrettyJson(h.AfterJson))</code></pre>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            }
+        }
+        </tbody>
+    </table>
+    </div>
+}
+
+@code {
+    private List<EntityChangeHistory>? _history;
+    private string? _entityName;
+    private HashSet<Guid> _expanded = new();
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // 路徑切換時重抓
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        var path = new Uri(Nav.Uri).AbsolutePath;
+        var isTask = path.Contains("/tasks/");
+        var entityType = isTask
+            ? EntityChangeHistoryRepository.EtlTaskEntityType
+            : EntityChangeHistoryRepository.ConnectionEntityType;
+
+        _history = await HistoryRepo.ListByEntityAsync(entityType, Id, take: 100, CancellationToken.None);
+
+        // 顯示名：先用最近一筆 history 的 EntityName；若還沒有 history 就回頭撈當前
+        _entityName = _history.FirstOrDefault()?.EntityName;
+        if (_entityName is null)
+        {
+            try
+            {
+                if (isTask)
+                {
+                    var t = await TaskRepo.GetWithMappingsAsync(Id, CancellationToken.None);
+                    _entityName = t?.Name;
+                }
+                else
+                {
+                    var c = await ConnRepo.GetAsync(Id, CancellationToken.None);
+                    _entityName = c?.Name;
+                }
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    private void ToggleExpand(Guid id)
+    {
+        if (!_expanded.Add(id)) _expanded.Remove(id);
+    }
+
+    private static MarkupString ActionBadge(EntityChangeAction a) => a switch
+    {
+        EntityChangeAction.Created => new MarkupString("<span class=\"badge bg-success\">Created</span>"),
+        EntityChangeAction.Updated => new MarkupString("<span class=\"badge bg-primary\">Updated</span>"),
+        EntityChangeAction.Deleted => new MarkupString("<span class=\"badge bg-danger\">Deleted</span>"),
+        _ => new MarkupString(a.ToString()),
+    };
+
+    private static string PrettyJson(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return "(無)";
+        try
+        {
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            return System.Text.Json.JsonSerializer.Serialize(doc.RootElement,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch
+        {
+            return json;
+        }
+    }
+}
