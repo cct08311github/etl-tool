@@ -56,7 +56,14 @@ else
                         </select>
                     </div>
                     <div class="mb-2">
-                        <label class="form-label">Schema</label>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <label class="form-label m-0">Schema</label>
+                            <button type="button" class="icon-btn" title="重新讀取 schema / table 清單"
+                                    disabled="@(_refreshingSource || _task.SourceConnectionId == Guid.Empty)"
+                                    @onclick="RefreshSourceMetadata">
+                                @if (_refreshingSource) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
+                            </button>
+                        </div>
                         <select class="form-select" @onchange="OnSourceSchemaChanged">
                             <option value="">— 選擇 —</option>
                             @foreach (var s in _sourceSchemas)
@@ -93,7 +100,14 @@ else
                         </select>
                     </div>
                     <div class="mb-2">
-                        <label class="form-label">Schema</label>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <label class="form-label m-0">Schema</label>
+                            <button type="button" class="icon-btn" title="重新讀取 schema / table 清單"
+                                    disabled="@(_refreshingTarget || _task.TargetConnectionId == Guid.Empty)"
+                                    @onclick="RefreshTargetMetadata">
+                                @if (_refreshingTarget) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
+                            </button>
+                        </div>
                         <select class="form-select" @onchange="OnTargetSchemaChanged">
                             <option value="">— 選擇 —</option>
                             @foreach (var s in _targetSchemas)
@@ -345,6 +359,8 @@ else
 
     private string? _message;
     private bool _isError;
+    private bool _refreshingSource;
+    private bool _refreshingTarget;
     private List<string> _validationErrors = new();
 
     private bool _dryRunBusy;
@@ -438,6 +454,22 @@ else
             await LoadTablesAsync(_task.SourceConnectionId, _task.SourceSchema, _sourceTables);
         if (!string.IsNullOrEmpty(_task.SourceTable))
             _sourceColumns = (await LoadColumnsAsync(_task.SourceConnectionId, _task.SourceSchema, _task.SourceTable)).ToList();
+    }
+
+    private async Task RefreshSourceMetadata()
+    {
+        _refreshingSource = true;
+        StateHasChanged();
+        try { await ReloadSourceMetadata(); }
+        finally { _refreshingSource = false; }
+    }
+
+    private async Task RefreshTargetMetadata()
+    {
+        _refreshingTarget = true;
+        StateHasChanged();
+        try { await ReloadTargetMetadata(); }
+        finally { _refreshingTarget = false; }
     }
 
     private async Task ReloadTargetMetadata()
