@@ -7,10 +7,19 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">活動日誌</h1>
-    <button class="btn btn-outline-primary" @onclick="VerifyChain" disabled="@_verifying">
-        @if (_verifying) { <Icon Name="loader" /> <span>驗證中…</span> }
-        else { <Icon Name="check-circle" /> <span>驗證審計鏈完整性</span> }
-    </button>
+    <div class="d-flex gap-2">
+        <AuthorizeView Roles="Admin">
+            <Authorized>
+                <a class="btn btn-outline-secondary" href="/Account/AuditExport">
+                    <Icon Name="download" /> 匯出 CSV
+                </a>
+            </Authorized>
+        </AuthorizeView>
+        <button class="btn btn-outline-primary" @onclick="VerifyChain" disabled="@_verifying">
+            @if (_verifying) { <Icon Name="loader" /> <span>驗證中…</span> }
+            else { <Icon Name="check-circle" /> <span>驗證審計鏈完整性</span> }
+        </button>
+    </div>
 </div>
 
 @if (_verifyResult is not null)

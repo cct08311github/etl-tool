@@ -17,7 +17,8 @@ public sealed class AdminIpAllowlistMiddleware
     {
         "/users",
         "/approvals",
-        "/audit",      // future audit pages
+        "/audit",                      // future audit pages
+        "/Account/AuditExport",        // downloading full audit trail = sensitive
     };
 
     private readonly RequestDelegate _next;

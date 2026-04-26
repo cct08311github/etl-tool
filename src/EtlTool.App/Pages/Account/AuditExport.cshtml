@@ -1,0 +1,48 @@
+@page
+@model EtlTool.App.Pages.Account.AuditExportModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>稽核日誌匯出 — ETL Tool</title>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/app.css" />
+</head>
+<body class="p-4">
+    <div class="container" style="max-width: 720px">
+        <h1 class="mb-3">稽核日誌匯出</h1>
+        <p class="text-muted">
+            產生 CSV 檔案，含每筆事件的完整 hash chain 欄位 + 匯出證書 footer，
+            供外部稽核 / 監理單位驗證 audit trail 未被竄改。
+        </p>
+
+        <form method="get" asp-page="/Account/AuditExport" asp-page-handler="Download">
+            @Html.AntiForgeryToken()
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label">起 (UTC)</label>
+                    <input type="date" name="from" class="form-control" value="@Model.DefaultFrom" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">迄 (UTC)</label>
+                    <input type="date" name="to" class="form-control" value="@Model.DefaultTo" />
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">下載 CSV</button>
+            <a href="/" class="btn btn-link">回首頁</a>
+        </form>
+
+        <hr class="my-4" />
+        <h2 class="h5">驗證說明</h2>
+        <ol class="small text-muted">
+            <li>檔案最後一行（以 <code># CERTIFICATE:</code> 開頭）紀錄匯出當下的鏈摘要與 body 的 SHA-256。</li>
+            <li>外部驗證：取 CSV body（去掉最後的 CERTIFICATE 行 + header 行），重算 SHA-256，與 cert 上的 ExportBodySha256 比對。</li>
+            <li>另外，FirstHash / LastHash 對應 live DB 的稽核鏈頭尾；可在 /logs 點「驗證審計鏈完整性」交叉比對是否與當時匯出一致。</li>
+        </ol>
+    </div>
+</body>
+</html>

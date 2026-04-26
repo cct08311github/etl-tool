@@ -50,6 +50,22 @@ public sealed class RunHistoryRepository : IRunHistorySink
             .Take(take)
             .ToListAsync(ct);
 
+    /// <summary>
+    /// 一次撈所有 task 的最近一次 Success run 開始時間。
+    /// 用單一 query (group by) 避免 N+1。
+    /// 沒成功過的 task 不會在 dict 裡。
+    /// </summary>
+    public async Task<Dictionary<Guid, DateTime>> LastSuccessByTaskAsync(CancellationToken ct)
+    {
+        var grouped = await _db.RunHistories
+            .AsNoTracking()
+            .Where(r => r.Status == RunStatus.Success)
+            .GroupBy(r => r.EtlTaskId)
+            .Select(g => new { TaskId = g.Key, LastAt = g.Max(r => r.StartedAt) })
+            .ToListAsync(ct);
+        return grouped.ToDictionary(x => x.TaskId, x => x.LastAt);
+    }
+
     /// <summary>清理單一 task 超出保留筆數的舊紀錄。</summary>
     public async Task PurgeOldAsync(Guid taskId, CancellationToken ct)
     {

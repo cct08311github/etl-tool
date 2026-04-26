@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
 @inject EtlTool.Data.Repositories.ApprovalRepository ApprovalRepo
+@inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo
 @inject EtlTool.Core.Scheduling.SchedulerService Scheduler
 @inject AuthenticationStateProvider AuthState
 
@@ -50,6 +51,7 @@ else
                 <th>模式</th>
                 <th>排程</th>
                 <th>下次執行</th>
+                <th>上次成功</th>
                 <th>啟用</th>
                 <th class="text-end">操作</th>
             </tr>
@@ -150,6 +152,7 @@ else
 @code {
     private List<EtlTool.Core.Models.EtlTask>? _items;
     private Dictionary<Guid, DateTimeOffset?> _nextFire = new();
+    private Dictionary<Guid, DateTime> _lastSuccess = new();
     private HashSet<Guid> _pendingTargets = new();
     private Guid? _running;
     private string? _currentUsername;
@@ -178,6 +181,7 @@ else
             try { _nextFire[t.Id] = await Scheduler.GetNextFireTimeAsync(t.Id, ct); }
             catch { _nextFire[t.Id] = null; }
         }
+        _lastSuccess = await RunHistoryRepo.LastSuccessByTaskAsync(ct);
         var pending = await ApprovalRepo.ListPendingAsync(ct);
         _pendingTargets = pending
             .Where(p => p.Action == ApprovalAction.DeleteTask)
