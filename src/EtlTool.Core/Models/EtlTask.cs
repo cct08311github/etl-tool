@@ -87,6 +87,13 @@ public class EtlTask
     /// </summary>
     public int? RunHistoryRetentionRuns { get; set; }
 
+    /// <summary>
+    /// 預期最長執行時間（分鐘）。任務執行超過此值，watchdog 會發 Warning audit。
+    /// null = 套用全域 LongRunningJob:MaxMinutes 預設；&lt;=0 視為停用。
+    /// 不會強制 cancel job — 只是觀察與通知。
+    /// </summary>
+    public int? MaxRunMinutes { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

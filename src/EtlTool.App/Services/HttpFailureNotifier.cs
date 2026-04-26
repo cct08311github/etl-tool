@@ -5,14 +5,15 @@ using EtlTool.Core.Models;
 namespace EtlTool.App.Services;
 
 /// <summary>
-/// 把 ETL 失敗事件 POST 成 JSON 到設定的 webhook URL。
-/// 適用：Slack incoming-webhook、Teams、PagerDuty Events API、自家 alert 接口。
+/// 把 ETL 執行結果 POST 成 JSON 到設定的 webhook URL。
+/// 支援 Slack（attachments + color）/ Teams (MessageCard) / 純通用 JSON。
 ///
 /// 設計：
 ///   - 從 Webhooks:OnFailure 讀 URL；空字串 = 完全 no-op
+///   - 從 Webhooks:Format 讀 "slack" / "teams" / "generic"（預設 generic）
 ///   - HTTP 5 秒 timeout，避免拖慢失敗處理
 ///   - 失敗只 log 不 throw — webhook 掛掉不能影響 ETL 失敗本身
-///   - Slack 兼容格式：{"text": "..."} + 詳細欄位 in attachment
+///   - 對 Recovery / 高 streak 有不同視覺 emphasis（透過 ErrorMessage 前綴判斷）
 /// </summary>
 public sealed class HttpFailureNotifier : IFailureNotifier
 {
@@ -27,25 +28,16 @@ public sealed class HttpFailureNotifier : IFailureNotifier
         _log = log;
     }
 
-    public async Task NotifyFailureAsync(EtlTask task, RunHistory run, CancellationToken ct)
+    public Task NotifyFailureAsync(EtlTask task, RunHistory run, CancellationToken ct)
+        => NotifyRunOutcomeAsync(task, run, ct);
+
+    public async Task NotifyRunOutcomeAsync(EtlTask task, RunHistory run, CancellationToken ct)
     {
         var url = _config["Webhooks:OnFailure"];
         if (string.IsNullOrWhiteSpace(url)) return;
 
-        var payload = new
-        {
-            text = $"⚠ ETL 任務失敗：「{task.Name}」",
-            task_id = task.Id.ToString(),
-            task_name = task.Name,
-            run_id = run.Id.ToString(),
-            status = run.Status.ToString(),
-            trigger_type = run.TriggerType.ToString(),
-            started_at = run.StartedAt.ToString("o"),
-            finished_at = run.FinishedAt?.ToString("o"),
-            rows_read = run.RowsRead,
-            rows_written = run.RowsWritten,
-            error = TruncateError(run.ErrorMessage, 1000),
-        };
+        var format = WebhookPayloadBuilder.ParseFormat(_config["Webhooks:Format"]);
+        var payload = WebhookPayloadBuilder.BuildPayload(format, task, run, run.ErrorMessage);
 
         try
         {
@@ -68,14 +60,7 @@ public sealed class HttpFailureNotifier : IFailureNotifier
         }
         catch (Exception ex)
         {
-            // 故意不重新拋；webhook 失敗不能拖累 ETL 失敗的處理
             _log.LogError(ex, "Failure webhook POST threw (URL hidden for security)");
         }
-    }
-
-    private static string? TruncateError(string? s, int max)
-    {
-        if (string.IsNullOrEmpty(s)) return s;
-        return s.Length <= max ? s : s[..max] + "… (truncated)";
     }
 }

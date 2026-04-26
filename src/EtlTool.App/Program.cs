@@ -148,6 +148,7 @@ builder.Services.AddHostedService<RunHistoryRetentionService>();
 builder.Services.AddHostedService<ConnectionHealthMonitor>();
 builder.Services.AddHostedService<MetricsScraperService>();
 builder.Services.AddHostedService<ApprovalExpirySweepService>();
+builder.Services.AddHostedService<LongRunningJobWatchdog>();
 
 // Authentication / Authorization
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));

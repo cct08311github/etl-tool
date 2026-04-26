@@ -53,7 +53,33 @@ else
                     <input class="form-control" type="number" min="1" max="10000"
                            placeholder="(留空=用全域設定)" @bind="_task.RunHistoryRetentionRuns" />
                 </div>
+                <div class="col-md-3">
+                    <label class="form-label">預期最長執行時間 (分)
+                        <small class="text-muted" title="超過時 watchdog 發 Warning audit；不會中斷任務">(覆寫)</small>
+                    </label>
+                    <input class="form-control" type="number" min="1" max="1440"
+                           placeholder="(留空=用全域 30)" @bind="_task.MaxRunMinutes" />
+                </div>
             </div>
+            @if (Id is not null)
+            {
+                <div class="mt-3 small text-muted d-flex align-items-center gap-2">
+                    @if (_task.SchemaSnapshotAt.HasValue)
+                    {
+                        <span>
+                            Schema 快照於 <code>@_task.SchemaSnapshotAt.Value.ToLocalTime():yyyy-MM-dd HH:mm</code>
+                            （drift 偵測會比對此快照與實際 schema）
+                        </span>
+                    }
+                    else
+                    {
+                        <span>尚未擷取 schema 快照（drift 偵測首次執行時自動建立）。</span>
+                    }
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearSchemaSnapshot">
+                        <Icon Name="refresh" /> 清除 schema 快照
+                    </button>
+                </div>
+            }
         </div>
     </div>
 
@@ -492,6 +518,17 @@ else
     private string? _dryRunError;
 
     private string? _currentUsername;
+
+    private void ClearSchemaSnapshot()
+    {
+        if (_task is null) return;
+        _task.SourceSchemaSnapshotJson = null;
+        _task.TargetSchemaSnapshotJson = null;
+        _task.SchemaSnapshotAt = null;
+        _message = "已清除 schema 快照（按「儲存」生效；下次執行時自動重建）。";
+        _isError = false;
+        StateHasChanged();
+    }
 
     protected override async Task OnInitializedAsync()
     {
