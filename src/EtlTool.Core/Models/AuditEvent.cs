@@ -70,4 +70,14 @@ public class AuditEvent
 
     /// <summary>選用的結構化 payload (JSON 字串，例如錯誤明細)。</summary>
     public string? DetailsJson { get; set; }
+
+    /// <summary>
+    /// SHA-256 hash chain：本筆 hash = SHA256(PreviousHash || canonical-encoded-fields)。
+    /// 任何欄位被竄改、或前一筆 hash 改了，本筆的 stored hash 就對不上重算結果 → tamper detected。
+    /// 由 AuditHasher.ComputeHash 計算；首筆 PreviousHash = "" (或 null）。
+    /// </summary>
+    public string? Hash { get; set; }
+
+    /// <summary>前一筆 audit event 的 Hash。第一筆 = null/空。</summary>
+    public string? PreviousHash { get; set; }
 }

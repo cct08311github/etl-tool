@@ -1,10 +1,43 @@
 @page "/logs"
 @rendermode InteractiveServer
 @inject EtlTool.Data.Repositories.AuditQueryRepository AuditRepo
+@inject EtlTool.Data.Repositories.AuditChainVerifier ChainVerifier
 
 <PageTitle>活動日誌</PageTitle>
 
-<h1>活動日誌</h1>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">活動日誌</h1>
+    <button class="btn btn-outline-primary" @onclick="VerifyChain" disabled="@_verifying">
+        @if (_verifying) { <Icon Name="loader" /> <span>驗證中…</span> }
+        else { <Icon Name="check-circle" /> <span>驗證審計鏈完整性</span> }
+    </button>
+</div>
+
+@if (_verifyResult is not null)
+{
+    <div class="alert @(_verifyResult.IsIntact ? "alert-success" : "alert-danger") d-flex align-items-start gap-2 mb-3">
+        @if (_verifyResult.IsIntact)
+        {
+            <strong>✓ 審計鏈完整</strong>
+            <span>已驗證 @_verifyResult.TotalChecked 筆事件，hash 全部對齊。</span>
+        }
+        else
+        {
+            <div>
+                <strong>⚠ 審計鏈異常 — 第 @_verifyResult.TotalChecked 筆 hash 不符</strong>
+                <div class="small mt-1">理由：@_verifyResult.Reason</div>
+                @if (_verifyResult.FirstBadEvent is not null)
+                {
+                    <div class="small">
+                        異常事件：<code>@_verifyResult.FirstBadEvent.At.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</code>
+                        / @_verifyResult.FirstBadEvent.Category / @_verifyResult.FirstBadEvent.Action
+                        — 訊息：@_verifyResult.FirstBadEvent.Message
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
 
 <div class="card mb-3">
     <div class="card-body">
@@ -92,19 +125,24 @@ else
                         </td>
                         <td><span class="text-muted small">@(e.Actor ?? "—")</span></td>
                         <td>
-                            @if (!string.IsNullOrEmpty(e.DetailsJson))
-                            {
-                                <button class="btn btn-sm btn-link p-0" @onclick="() => ToggleDetails(e.Id)">
-                                    @(_expanded.Contains(e.Id) ? "收合" : "詳情")
-                                </button>
-                            }
+                            <button class="btn btn-sm btn-link p-0" @onclick="() => ToggleDetails(e.Id)">
+                                @(_expanded.Contains(e.Id) ? "收合" : "詳情")
+                            </button>
                         </td>
                     </tr>
-                    @if (_expanded.Contains(e.Id) && !string.IsNullOrEmpty(e.DetailsJson))
+                    @if (_expanded.Contains(e.Id))
                     {
                         <tr>
                             <td colspan="8">
-                                <pre>@e.DetailsJson</pre>
+                                @if (!string.IsNullOrEmpty(e.DetailsJson))
+                                {
+                                    <pre class="mb-2">@e.DetailsJson</pre>
+                                }
+                                <div class="small text-muted">
+                                    <div>Event Id: <code>@e.Id</code></div>
+                                    <div>Hash:     <code class="text-break">@(e.Hash ?? "(未計算)")</code></div>
+                                    <div>Prev:     <code class="text-break">@(e.PreviousHash ?? "(初始)")</code></div>
+                                </div>
                             </td>
                         </tr>
                     }
@@ -135,6 +173,24 @@ else
     private const int _take = 50;
     private bool _loading = true;
     private HashSet<Guid> _expanded = new();
+
+    private bool _verifying;
+    private EtlTool.Data.Repositories.AuditChainVerifier.VerifyResult? _verifyResult;
+
+    private async Task VerifyChain()
+    {
+        _verifying = true;
+        _verifyResult = null;
+        StateHasChanged();
+        try
+        {
+            _verifyResult = await ChainVerifier.VerifyAsync(CancellationToken.None);
+        }
+        finally
+        {
+            _verifying = false;
+        }
+    }
 
     protected override Task OnInitializedAsync() => RunQuery();
 

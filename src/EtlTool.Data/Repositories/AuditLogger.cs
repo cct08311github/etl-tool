@@ -7,16 +7,19 @@ using Microsoft.Extensions.Logging;
 namespace EtlTool.Data.Repositories;
 
 /// <summary>
-/// EF Core 落地 AuditEvent 的實作。
+/// EF Core 落地 AuditEvent 的實作。Singleton。
 /// 設計準則：
 ///   1) 寫 audit 失敗只 log 不 throw — 不可影響主流程
 ///   2) 用獨立的 DI scope 取得 DbContext，避免污染呼叫者的 change tracker
-///      （特別是當呼叫者已經在 SaveChanges 期間時）
+///   3) Hash chain：每筆 audit hash = SHA256(prevHash || canonical fields)
+///      用 SemaphoreSlim 序列化 inserts，確保 chain 順序正確
 /// </summary>
 public sealed class AuditLogger : IAuditLogger
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<AuditLogger> _log;
+    // 全程序唯一 — 序列化 audit insert 以維持 hash chain 順序
+    private static readonly SemaphoreSlim _chainLock = new(1, 1);
 
     public AuditLogger(IServiceScopeFactory scopeFactory, ILogger<AuditLogger> log)
     {
@@ -50,10 +53,21 @@ public sealed class AuditLogger : IAuditLogger
             DetailsJson = detailsJson,
         };
 
+        await _chainLock.WaitAsync(ct);
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            // 撈最後一筆的 hash 作為 prev
+            var prev = await db.AuditEvents
+                .OrderByDescending(e => e.At).ThenByDescending(e => e.Id)
+                .Select(e => e.Hash)
+                .FirstOrDefaultAsync(ct);
+
+            evt.PreviousHash = prev;
+            evt.Hash = AuditHasher.ComputeHash(evt, prev);
+
             db.AuditEvents.Add(evt);
             await db.SaveChangesAsync(ct);
         }
@@ -62,10 +76,68 @@ public sealed class AuditLogger : IAuditLogger
             _log.LogError(ex, "Failed to persist audit event ({Category}/{Action}): {Message}",
                 category, action, message);
         }
+        finally
+        {
+            _chainLock.Release();
+        }
     }
 
     private static string? Truncate(string? s, int max) =>
         s is null ? null : s.Length <= max ? s : s[..max];
+}
+
+/// <summary>
+/// 走訪整個 audit log，重算每筆 hash 與 stored 比對，回報第一處 tampering 位置。
+/// 用於合規檢查 / 事故調查。
+/// </summary>
+public sealed class AuditChainVerifier
+{
+    private readonly AppDbContext _db;
+    public AuditChainVerifier(AppDbContext db) { _db = db; }
+
+    public sealed record VerifyResult(
+        bool IsIntact,
+        long TotalChecked,
+        AuditEvent? FirstBadEvent,
+        string? Reason);
+
+    public async Task<VerifyResult> VerifyAsync(CancellationToken ct)
+    {
+        // 全表流式驗證；At 升序、Id 升序作為 stable tiebreaker
+        var query = _db.AuditEvents
+            .AsNoTracking()
+            .OrderBy(e => e.At).ThenBy(e => e.Id);
+
+        long n = 0;
+        string? prev = null;
+
+        await foreach (var e in query.AsAsyncEnumerable().WithCancellation(ct))
+        {
+            n++;
+
+            // 1. PreviousHash 應該等於上一筆的 Hash
+            if (!string.Equals(e.PreviousHash ?? "", prev ?? "", StringComparison.Ordinal))
+            {
+                return new VerifyResult(false, n, e,
+                    $"PreviousHash 與上一筆 Hash 不符（第 {n} 筆）：" +
+                    $"expected '{prev ?? "<null>"}'，stored '{e.PreviousHash ?? "<null>"}'");
+            }
+
+            // 2. 重算 hash 應該等於 stored Hash
+            var recomputed = AuditHasher.ComputeHash(e, prev);
+            if (!string.Equals(recomputed, e.Hash, StringComparison.Ordinal))
+            {
+                return new VerifyResult(false, n, e,
+                    $"Hash 重算不符（第 {n} 筆）：" +
+                    $"recomputed '{recomputed}'，stored '{e.Hash ?? "<null>"}' — " +
+                    "可能此筆內容被竄改");
+            }
+
+            prev = e.Hash;
+        }
+
+        return new VerifyResult(true, n, null, null);
+    }
 }
 
 public sealed class AuditQueryRepository

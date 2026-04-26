@@ -96,6 +96,7 @@ builder.Services.AddScoped<ConnectionRepository>();
 builder.Services.AddScoped<EtlTaskRepository>();
 builder.Services.AddScoped<RunHistoryRepository>();
 builder.Services.AddScoped<AuditQueryRepository>();
+builder.Services.AddScoped<AuditChainVerifier>();
 builder.Services.AddSingleton<IAuditLogger, AuditLogger>();
 
 builder.Services.AddScoped<IConnectionLookup>(sp => sp.GetRequiredService<ConnectionRepository>());

@@ -25,6 +25,9 @@ public sealed class StartupBootstrapper : IHostedService
         await db.Database.MigrateAsync(ct);
         _log.LogInformation("Database migrated to latest schema.");
 
+        // 補填 audit 鏈結：之前 hash chain 還沒上線就存在的 audit events
+        await BackfillAuditHashesAsync(db, ct);
+
         // Quartz host service 會稍後啟動，這裡先註冊好 jobs
         var scheduler = scope.ServiceProvider.GetRequiredService<SchedulerService>();
         await scheduler.InitializeAsync(ct);
@@ -32,6 +35,38 @@ public sealed class StartupBootstrapper : IHostedService
         var audit = scope.ServiceProvider.GetRequiredService<IAuditLogger>();
         await audit.LogAsync(AuditCategory.System, AuditAction.SystemStart,
             "系統啟動完成", ct: ct);
+    }
+
+    private async Task BackfillAuditHashesAsync(AppDbContext db, CancellationToken ct)
+    {
+        // 只做一次性 backfill：找出 Hash 為 null 的，按時序補
+        // 注意：之後若重新 backfill 整鏈，原有 hash 會被覆蓋（這對「歷史竄改偵測」有風險）
+        // 因此只補 Hash IS NULL 的，已 hash 的不動
+        var needsBackfill = await db.AuditEvents
+            .Where(e => e.Hash == null)
+            .OrderBy(e => e.At).ThenBy(e => e.Id)
+            .ToListAsync(ct);
+
+        if (needsBackfill.Count == 0) return;
+
+        _log.LogInformation("Backfilling hash chain for {Count} pre-existing audit events…", needsBackfill.Count);
+
+        // 取「最後一筆有 hash 的」作為起始 prev
+        var prev = await db.AuditEvents
+            .Where(e => e.Hash != null)
+            .OrderByDescending(e => e.At).ThenByDescending(e => e.Id)
+            .Select(e => e.Hash)
+            .FirstOrDefaultAsync(ct);
+
+        foreach (var e in needsBackfill)
+        {
+            e.PreviousHash = prev;
+            e.Hash = AuditHasher.ComputeHash(e, prev);
+            prev = e.Hash;
+        }
+
+        await db.SaveChangesAsync(ct);
+        _log.LogInformation("Audit hash chain backfilled.");
     }
 
     public async Task StopAsync(CancellationToken ct)

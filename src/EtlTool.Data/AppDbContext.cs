@@ -73,6 +73,8 @@ public class AppDbContext : DbContext
             e.HasIndex(x => x.At);
             e.HasIndex(x => new { x.Category, x.At });
             e.HasIndex(x => new { x.Severity, x.At });
+            e.Property(x => x.Hash).HasMaxLength(64);
+            e.Property(x => x.PreviousHash).HasMaxLength(64);
         });
     }
 }
