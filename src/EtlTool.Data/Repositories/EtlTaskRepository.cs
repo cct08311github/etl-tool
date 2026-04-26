@@ -96,6 +96,7 @@ public sealed class EtlTaskRepository : IEtlTaskLookup, IAllEtlTasksProvider
         existing.RowCountPolicy = task.RowCountPolicy;
         existing.RunHistoryRetentionRuns = task.RunHistoryRetentionRuns;
         existing.MaxRunMinutes = task.MaxRunMinutes;
+        existing.AutoDisableAfterFailures = task.AutoDisableAfterFailures;
         existing.UpdatedAt = DateTime.UtcNow;
 
         // 用 ExecuteDeleteAsync 直接下 SQL DELETE，繞過 change tracker
@@ -177,6 +178,7 @@ public sealed class EtlTaskRepository : IEtlTaskLookup, IAllEtlTasksProvider
         long? MinExpectedRows, long? MaxExpectedRows, EtlTool.Core.Engine.RowCountAssertionPolicy RowCountPolicy,
         int? RunHistoryRetentionRuns,
         int? MaxRunMinutes,
+        int? AutoDisableAfterFailures,
         List<MappingSnapshot> Mappings);
 
     private record MappingSnapshot(
@@ -198,6 +200,7 @@ public sealed class EtlTaskRepository : IEtlTaskLookup, IAllEtlTasksProvider
         t.MinExpectedRows, t.MaxExpectedRows, t.RowCountPolicy,
         t.RunHistoryRetentionRuns,
         t.MaxRunMinutes,
+        t.AutoDisableAfterFailures,
         mappings.Select(m => new MappingSnapshot(
             m.SourceColumn, m.TargetColumn, m.IsKey, m.TransformExpression, m.OrderIndex)).ToList());
 }

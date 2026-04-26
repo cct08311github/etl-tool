@@ -18,12 +18,14 @@ public sealed class EtlJob : IJob
     private readonly SchedulerKillSwitch? _killSwitch;
     private readonly IOptionsMonitor<MaintenanceWindowsOptions>? _maintenance;
     private readonly IAuditLogger? _audit;
+    private readonly ICircuitBreakerEnforcer? _circuitBreaker;
 
     public EtlJob(
         EtlEngine engine, IEtlTaskLookup taskLookup, ILogger<EtlJob> log,
         SchedulerKillSwitch? killSwitch = null,
         IOptionsMonitor<MaintenanceWindowsOptions>? maintenance = null,
-        IAuditLogger? audit = null)
+        IAuditLogger? audit = null,
+        ICircuitBreakerEnforcer? circuitBreaker = null)
     {
         _engine = engine;
         _taskLookup = taskLookup;
@@ -31,6 +33,7 @@ public sealed class EtlJob : IJob
         _killSwitch = killSwitch;
         _maintenance = maintenance;
         _audit = audit;
+        _circuitBreaker = circuitBreaker;
     }
 
     public async Task Execute(IJobExecutionContext context)
@@ -94,17 +97,36 @@ public sealed class EtlJob : IJob
     /// <summary>
     /// 第 1 次依 triggerType 執行；後續重試一律以 TriggerType.Retry 標示。
     /// 每次嘗試 = 1 筆 RunHistory；exponential backoff 由 task 設定控制。
+    /// 全部嘗試完成後（無論成功或失敗）通知 circuit-breaker，可能 auto-disable 此任務。
     /// </summary>
-    internal Task ExecuteWithRetryAsync(EtlTask task, TriggerType triggerType, CancellationToken ct)
-        => RetryPolicy.RunWithRetriesAsync(
+    internal async Task ExecuteWithRetryAsync(EtlTask task, TriggerType triggerType, CancellationToken ct)
+    {
+        RunHistory? lastRun = null;
+        await RetryPolicy.RunWithRetriesAsync(
             task, triggerType,
             attempt: async (trigger, cancel) =>
             {
                 var run = await _engine.ExecuteAsync(task, trigger, cancel);
+                lastRun = run;
                 return run.Status;
             },
             log: _log,
             ct: ct);
+
+        // Circuit-breaker check — only meaningful if the final attempt failed.
+        // 若機制未啟用 (_circuitBreaker = null 或 threshold = 0)，內部會 early return。
+        if (_circuitBreaker is not null && lastRun is not null && lastRun.Status == RunStatus.Failed)
+        {
+            try
+            {
+                await _circuitBreaker.OnRunCompleteAsync(task, lastRun, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Circuit-breaker enforcer threw for task {TaskId}", task.Id);
+            }
+        }
+    }
 }
 
 public interface IEtlTaskLookup

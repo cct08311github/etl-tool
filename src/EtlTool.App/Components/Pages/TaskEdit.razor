@@ -60,6 +60,13 @@ else
                     <input class="form-control" type="number" min="1" max="1440"
                            placeholder="(留空=用全域 30)" @bind="_task.MaxRunMinutes" />
                 </div>
+                <div class="col-md-3">
+                    <label class="form-label">連續失敗自動停用
+                        <small class="text-muted" title="連續失敗 N 次自動 Disable 此任務；admin 修復後手動再啟用">(circuit-breaker)</small>
+                    </label>
+                    <input class="form-control" type="number" min="1" max="100"
+                           placeholder="(留空=用全域 / 0)" @bind="_task.AutoDisableAfterFailures" />
+                </div>
             </div>
             @if (Id is not null)
             {

@@ -122,6 +122,7 @@ builder.Services.AddHttpClient();
 //   - 從 alert 狀態恢復成功 → 也打一筆「[RECOVERY]」訊息
 // 可透過 Webhooks:FailureStreakThreshold 調整。
 builder.Services.AddSingleton<HttpFailureNotifier>();
+builder.Services.AddSingleton<ICircuitBreakerEnforcer, DefaultCircuitBreakerEnforcer>();
 builder.Services.AddSingleton<IFailureNotifier>(sp =>
 {
     var inner = sp.GetRequiredService<HttpFailureNotifier>();

@@ -89,14 +89,30 @@ else
         <tbody>
         @foreach (var r in _filtered)
         {
-            <tr>
-                <td><span class="font-monospace small">@r.StartedAt.ToLocalTime().ToString("MM-dd HH:mm:ss")</span></td>
+            var isRetry = r.TriggerType == TriggerType.Retry;
+            <tr class="@(isRetry ? "retry-row" : "")" style="@(isRetry ? "background: rgba(0,0,0,0.025)" : "")">
+                <td>
+                    @if (isRetry)
+                    {
+                        <span class="text-muted small me-1" title="這是上一次失敗後的自動重試">↳</span>
+                    }
+                    <span class="font-monospace small">@r.StartedAt.ToLocalTime().ToString("MM-dd HH:mm:ss")</span>
+                </td>
                 <td><span class="font-monospace small text-muted">@(r.FinishedAt?.ToLocalTime().ToString("MM-dd HH:mm:ss") ?? "—")</span></td>
                 <td class="small text-muted">@(r.FinishedAt is null ? "—" : (r.FinishedAt.Value - r.StartedAt).ToString(@"hh\:mm\:ss"))</td>
                 <td><RunStatusBadge Status="@r.Status" /></td>
                 <td class="text-end">@r.RowsRead</td>
                 <td class="text-end">@r.RowsWritten</td>
-                <td><span class="text-muted small">@r.TriggerType</span></td>
+                <td>
+                    @if (isRetry)
+                    {
+                        <span class="badge bg-light text-dark border">Retry</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted small">@r.TriggerType</span>
+                    }
+                </td>
                 <td class="text-end">
                     <a class="icon-btn" title="詳情" href="@($"runs/{r.Id}")"><Icon Name="external-link" /></a>
                 </td>

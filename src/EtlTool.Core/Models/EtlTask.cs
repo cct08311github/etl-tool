@@ -94,6 +94,14 @@ public class EtlTask
     /// </summary>
     public int? MaxRunMinutes { get; set; }
 
+    /// <summary>
+    /// 連續失敗 N 次後自動停用此任務的 circuit-breaker 閾值。
+    /// null = 套用全域 Reliability:AutoDisableAfterFailures（預設 0 = 停用）。
+    /// 銀行情境：避免一個壞掉的任務每分鐘失敗一次，連續打爆來源 DB / 灌爆 audit log。
+    /// 觸發時：Enabled 設為 false、寫 Warning audit、重新排程；Admin 修復後手動重啟。
+    /// </summary>
+    public int? AutoDisableAfterFailures { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
