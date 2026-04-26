@@ -23,6 +23,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.Name).HasMaxLength(100).IsRequired();
             e.Property(x => x.EncryptedConnectionString).IsRequired();
             e.Property(x => x.ProviderType).HasConversion<int>();
+            e.Property(x => x.LastCheckError).HasMaxLength(1000);
         });
 
         b.Entity<EtlTask>(e =>

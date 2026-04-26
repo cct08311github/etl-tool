@@ -16,9 +16,21 @@ else
 {
     <div class="row g-3 mb-4">
         <div class="col-md-3 col-sm-6">
-            <div class="stat-card">
-                <div class="stat-label"><Icon Name="database" /> 連線</div>
-                <div class="stat-value">@_connectionsCount</div>
+            <div class="stat-card @(_unhealthyConnections > 0 ? "stat-danger" : "")">
+                <div class="stat-label"><Icon Name="database" /> 連線健康</div>
+                <div class="stat-value">
+                    @(_connectionsCount - _unhealthyConnections) / @_connectionsCount
+                </div>
+                @if (_unhealthyConnections > 0)
+                {
+                    <div class="stat-meta text-danger">
+                        ⚠ @_unhealthyConnections 條失敗
+                    </div>
+                }
+                else if (_connectionsCount > 0)
+                {
+                    <div class="stat-meta">全部正常</div>
+                }
             </div>
         </div>
         <div class="col-md-3 col-sm-6">
@@ -86,6 +98,7 @@ else
 @code {
     private bool _loading = true;
     private int _connectionsCount;
+    private int _unhealthyConnections;
     private int _tasksCount;
     private int _enabledTasksCount;
     private int _recentSuccess;
@@ -101,6 +114,7 @@ else
         var runs = await RunHistoryRepo.ListRecentAsync(50, ct);
 
         _connectionsCount = conns.Count;
+        _unhealthyConnections = conns.Count(c => c.LastCheckOk == false);
         _tasksCount = tasks.Count;
         _enabledTasksCount = tasks.Count(t => t.Enabled);
         _taskNames = tasks.ToDictionary(t => t.Id, t => t.Name);

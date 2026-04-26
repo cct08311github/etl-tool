@@ -115,9 +115,15 @@ builder.Services.AddQuartzHostedService(opt => { opt.WaitForJobsToComplete = tru
 // Migrations + scheduler bootstrap
 builder.Services.AddHostedService<StartupBootstrapper>();
 
+// Banking-grade reliability: nightly audit retention + periodic connection health
+builder.Services.AddHostedService<AuditRetentionService>();
+builder.Services.AddHostedService<ConnectionHealthMonitor>();
+
 // Authentication / Authorization
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 builder.Services.AddSingleton<UserAuthService>();
+builder.Services.AddSingleton(builder.Configuration.GetSection("Auth:Lockout").Get<LoginLockoutOptions>() ?? new LoginLockoutOptions());
+builder.Services.AddSingleton<LoginLockoutService>();
 builder.Services.AddCascadingAuthenticationState();
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -175,6 +181,10 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+
+// Banking 安全 headers（OWASP Secure Headers baseline）
+app.UseSecurityHeaders();
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();

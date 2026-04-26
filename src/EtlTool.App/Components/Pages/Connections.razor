@@ -30,6 +30,7 @@ else
             <tr>
                 <th>名稱</th>
                 <th>類型</th>
+                <th>健康狀態</th>
                 <th>建立時間</th>
                 <th class="text-end">操作</th>
             </tr>
@@ -45,6 +46,22 @@ else
                 </td>
                 <td>
                     <span class="badge bg-primary">@c.ProviderType</span>
+                </td>
+                <td>
+                    @if (c.LastCheckedAt is null)
+                    {
+                        <span class="badge bg-warning" title="尚未檢查">未檢查</span>
+                    }
+                    else if (c.LastCheckOk == true)
+                    {
+                        <span class="badge bg-success" title="@($"上次檢查 {c.LastCheckedAt.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}")">正常</span>
+                        <small class="text-muted ms-1">@FormatRelative(c.LastCheckedAt.Value)</small>
+                    }
+                    else
+                    {
+                        <span class="badge bg-danger" title="@(c.LastCheckError ?? "")">失敗</span>
+                        <small class="text-muted ms-1">@FormatRelative(c.LastCheckedAt.Value)</small>
+                    }
                 </td>
                 <td class="small text-muted">@c.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
                 <td class="text-end">
@@ -75,5 +92,14 @@ else
         await ConnRepo.DeleteAsync(id, CancellationToken.None);
         _items = await ConnRepo.ListAsync(CancellationToken.None);
         StateHasChanged();
+    }
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        if (diff.TotalSeconds < 60) return "剛剛";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes} 分鐘前";
+        if (diff.TotalHours < 24)   return $"{(int)diff.TotalHours} 小時前";
+        return $"{(int)diff.TotalDays} 天前";
     }
 }

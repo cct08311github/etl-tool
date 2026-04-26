@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\EtlTool.Core\EtlTool.Core.csproj" />
     <ProjectReference Include="..\..\src\EtlTool.Connectors\EtlTool.Connectors.csproj" />
     <ProjectReference Include="..\..\src\EtlTool.Data\EtlTool.Data.csproj" />
+    <ProjectReference Include="..\..\src\EtlTool.App\EtlTool.App.csproj" />
   </ItemGroup>
 
 </Project>

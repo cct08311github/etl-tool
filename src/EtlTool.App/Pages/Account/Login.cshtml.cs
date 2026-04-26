@@ -16,11 +16,13 @@ public class LoginModel : PageModel
 {
     private readonly UserAuthService _auth;
     private readonly IAuditLogger _audit;
+    private readonly LoginLockoutService _lockout;
 
-    public LoginModel(UserAuthService auth, IAuditLogger audit)
+    public LoginModel(UserAuthService auth, IAuditLogger audit, LoginLockoutService lockout)
     {
         _auth = auth;
         _audit = audit;
+        _lockout = lockout;
     }
 
     [BindProperty, Required] public string Username { get; set; } = "";
@@ -44,18 +46,43 @@ public class LoginModel : PageModel
             return Page();
         }
 
-        if (!_auth.Validate(Username, Password))
+        // 先檢查 lockout：避免被鎖中的帳號還能繼續嘗試（防止計數重啟）
+        var lockedSecs = _lockout.GetLockedSeconds(Username);
+        if (lockedSecs > 0)
         {
-            Error = "帳號或密碼錯誤";
-            await _audit.LogAsync(
-                AuditCategory.Auth, AuditAction.LoginFailed,
-                $"登入失敗：{Username}",
-                actor: Username,
-                severity: AuditSeverity.Warning);
-            // 故意延遲 ~300ms 抵抗 timing 與暴力破解
+            Error = $"連續登入失敗次數過多，帳號已被鎖定。請於 {lockedSecs} 秒後再試。";
             await Task.Delay(300);
             return Page();
         }
+
+        if (!_auth.Validate(Username, Password))
+        {
+            var (fails, justLocked) = _lockout.RecordFailure(Username);
+
+            if (justLocked)
+            {
+                await _audit.LogAsync(
+                    AuditCategory.Auth, AuditAction.LoginFailed,
+                    $"帳號「{Username}」連續 {fails} 次失敗已被鎖定 15 分鐘",
+                    actor: Username,
+                    severity: AuditSeverity.Error);
+                Error = "連續登入失敗次數過多，帳號已被鎖定 15 分鐘。";
+            }
+            else
+            {
+                await _audit.LogAsync(
+                    AuditCategory.Auth, AuditAction.LoginFailed,
+                    $"登入失敗：{Username}（第 {fails} 次）",
+                    actor: Username,
+                    severity: AuditSeverity.Warning);
+                Error = "帳號或密碼錯誤";
+            }
+            await Task.Delay(300);
+            return Page();
+        }
+
+        // 成功 → 清空 lockout 計數
+        _lockout.RecordSuccess(Username);
 
         var claims = new List<Claim>
         {
