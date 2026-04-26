@@ -18,6 +18,7 @@ public sealed class AdminIpAllowlistMiddleware
         "/users",
         "/approvals",
         "/audit",                      // future audit pages
+        "/scheduler",                  // scheduler inspection — diagnostic but reveals job structure
         "/Account/AuditExport",        // downloading full audit trail = sensitive
     };
 

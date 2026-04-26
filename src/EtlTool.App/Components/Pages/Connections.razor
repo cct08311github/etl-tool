@@ -2,6 +2,9 @@
 @rendermode InteractiveServer
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
 @inject EtlTool.Data.Repositories.ApprovalRepository ApprovalRepo
+@inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory
+@inject EtlTool.Core.Connectors.IConnectionStringProtector Protector
+@inject EtlTool.Core.Engine.IAuditLogger AuditLogger
 @inject AuthenticationStateProvider AuthState
 @inject NavigationManager Nav
 
@@ -109,7 +112,13 @@ else
                     <AuthorizeView Roles="Admin,Operator" Context="ctx">
                         <Authorized>
                             <div class="row-actions">
+                                <button class="icon-btn" title="立即測試連線"
+                                        @onclick="() => QuickTest(c)" disabled="@(_testingId == c.Id)">
+                                    @if (_testingId == c.Id) { <Icon Name="loader" /> }
+                                    else { <Icon Name="check-circle" /> }
+                                </button>
                                 <a class="icon-btn" title="編輯" href="@($"connections/{c.Id}")"><Icon Name="edit" /></a>
+                                <a class="icon-btn" title="變更歷史" href="@($"connections/{c.Id}/history")"><Icon Name="history" /></a>
                                 <button class="icon-btn icon-btn-danger" title="送交覆核刪除"
                                         @onclick="() => OpenSubmit(c)"
                                         disabled="@_pendingTargets.Contains(c.Id)">
@@ -166,6 +175,8 @@ else
     private string _reason = "";
     private string? _modalError;
 
+    private Guid? _testingId;
+
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthState.GetAuthenticationStateAsync();
@@ -214,6 +225,54 @@ else
         catch (Exception ex)
         {
             _modalError = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// 一鍵 Test Connection — 不用進編輯頁。失敗 / 成功都寫 audit。
+    /// </summary>
+    private async Task QuickTest(EtlTool.Core.Models.ConnectionDefinition c)
+    {
+        _testingId = c.Id;
+        _isError = false;
+        _message = null;
+        try
+        {
+            var plain = await ConnRepo.GetPlainConnectionStringAsync(c.Id, Protector, CancellationToken.None);
+            var connector = ConnectorFactory.Create(c.ProviderType, plain);
+            var ok = await connector.TestConnectionAsync(CancellationToken.None);
+            _isError = !ok;
+            _message = ok
+                ? $"✓ 連線「{c.Name}」測試成功"
+                : $"⚠ 連線「{c.Name}」測試失敗，請檢查設定與網路可達性。";
+
+            await AuditLogger.LogAsync(
+                EtlTool.Core.Models.AuditCategory.Connection,
+                ok ? EtlTool.Core.Models.AuditAction.Update : EtlTool.Core.Models.AuditAction.Update,
+                $"{(ok ? "✓" : "⚠")} 一鍵測試連線「{c.Name}」: {(ok ? "成功" : "失敗")}",
+                targetType: nameof(EtlTool.Core.Models.ConnectionDefinition),
+                targetId: c.Id, targetName: c.Name,
+                severity: ok ? EtlTool.Core.Models.AuditSeverity.Info : EtlTool.Core.Models.AuditSeverity.Warning,
+                actor: _currentUsername,
+                ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"連線「{c.Name}」測試失敗：{ex.Message}";
+            await AuditLogger.LogAsync(
+                EtlTool.Core.Models.AuditCategory.Connection,
+                EtlTool.Core.Models.AuditAction.Update,
+                $"⚠ 一鍵測試連線「{c.Name}」拋例外: {ex.Message}",
+                targetType: nameof(EtlTool.Core.Models.ConnectionDefinition),
+                targetId: c.Id, targetName: c.Name,
+                severity: EtlTool.Core.Models.AuditSeverity.Warning,
+                actor: _currentUsername,
+                ct: CancellationToken.None);
+        }
+        finally
+        {
+            _testingId = null;
         }
     }
 

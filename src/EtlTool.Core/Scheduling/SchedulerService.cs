@@ -99,6 +99,63 @@ public sealed class SchedulerService
         return triggers.Select(t => t.GetNextFireTimeUtc()).Where(d => d.HasValue).Min();
     }
 
+    /// <summary>
+    /// 提供給 admin /scheduler 頁面：列出所有註冊的 jobs + 對應 triggers (next/prev fire time +
+    /// state) + 目前正在執行的 job 詳情。所有資料以 read-only snapshot 回傳。
+    /// </summary>
+    public async Task<SchedulerInspection> InspectAsync(CancellationToken ct)
+    {
+        var scheduler = await _schedulerFactory.GetScheduler(ct);
+
+        var inStandby = scheduler.InStandbyMode;
+        var isShutdown = scheduler.IsShutdown;
+        var schedulerName = scheduler.SchedulerName;
+
+        var allJobKeys = await scheduler.GetJobKeys(Quartz.Impl.Matchers.GroupMatcher<JobKey>.AnyGroup(), ct);
+
+        var jobs = new List<JobInspection>();
+        foreach (var key in allJobKeys.OrderBy(k => k.Name))
+        {
+            var detail = await scheduler.GetJobDetail(key, ct);
+            var taskIdStr = detail?.JobDataMap.GetString(EtlJob.TaskIdKey);
+            Guid? taskId = Guid.TryParse(taskIdStr, out var tid) ? tid : null;
+
+            var triggers = await scheduler.GetTriggersOfJob(key, ct);
+            var triggerInfos = new List<TriggerInspection>();
+            foreach (var t in triggers)
+            {
+                var state = await scheduler.GetTriggerState(t.Key, ct);
+                triggerInfos.Add(new TriggerInspection(
+                    Name: t.Key.Name,
+                    Group: t.Key.Group,
+                    State: state.ToString(),
+                    Description: t is ICronTrigger ct2 ? ct2.CronExpressionString : t.GetType().Name,
+                    PreviousFireTimeUtc: t.GetPreviousFireTimeUtc(),
+                    NextFireTimeUtc: t.GetNextFireTimeUtc()));
+            }
+
+            jobs.Add(new JobInspection(
+                Group: key.Group,
+                Name: key.Name,
+                TaskId: taskId,
+                Triggers: triggerInfos));
+        }
+
+        var executing = await scheduler.GetCurrentlyExecutingJobs(ct);
+        var current = executing.Select(c => new CurrentlyExecuting(
+            JobName: c.JobDetail.Key.Name,
+            JobGroup: c.JobDetail.Key.Group,
+            FireTimeUtc: c.FireTimeUtc.UtcDateTime,
+            RunMs: (long)c.JobRunTime.TotalMilliseconds)).ToList();
+
+        return new SchedulerInspection(
+            SchedulerName: schedulerName,
+            InStandby: inStandby,
+            IsShutdown: isShutdown,
+            Jobs: jobs,
+            CurrentlyExecuting: current);
+    }
+
     private static async Task ScheduleInternalAsync(
         IScheduler scheduler, EtlTask task, CancellationToken ct, bool includeTrigger = true)
     {
@@ -134,3 +191,31 @@ public interface IAllEtlTasksProvider
 {
     Task<IReadOnlyList<EtlTask>> GetAllAsync(CancellationToken ct);
 }
+
+/// <summary>給 admin 排程檢視頁面。</summary>
+public sealed record SchedulerInspection(
+    string SchedulerName,
+    bool InStandby,
+    bool IsShutdown,
+    IReadOnlyList<JobInspection> Jobs,
+    IReadOnlyList<CurrentlyExecuting> CurrentlyExecuting);
+
+public sealed record JobInspection(
+    string Group,
+    string Name,
+    Guid? TaskId,
+    IReadOnlyList<TriggerInspection> Triggers);
+
+public sealed record TriggerInspection(
+    string Name,
+    string Group,
+    string State,
+    string? Description,
+    DateTimeOffset? PreviousFireTimeUtc,
+    DateTimeOffset? NextFireTimeUtc);
+
+public sealed record CurrentlyExecuting(
+    string JobName,
+    string JobGroup,
+    DateTimeOffset FireTimeUtc,
+    long RunMs);

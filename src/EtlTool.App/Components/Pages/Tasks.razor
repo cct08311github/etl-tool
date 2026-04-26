@@ -10,14 +10,70 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">ETL 任務</h1>
-    <AuthorizeView Roles="Admin,Operator">
-        <Authorized>
-            <a class="btn btn-primary" href="tasks/new">
-                <Icon Name="plus" />新增任務
-            </a>
-        </Authorized>
-    </AuthorizeView>
+    <div class="d-flex gap-2">
+        <AuthorizeView Roles="Admin">
+            <Authorized>
+                @if (_items is not null && _items.Any(t => !t.Enabled))
+                {
+                    <button class="btn btn-outline-success" @onclick="() => OpenBulk(true)">
+                        <Icon Name="play" /> 批次啟用所有
+                    </button>
+                }
+                @if (_items is not null && _items.Any(t => t.Enabled))
+                {
+                    <button class="btn btn-outline-warning" @onclick="() => OpenBulk(false)">
+                        <Icon Name="pause" /> 批次停用所有
+                    </button>
+                }
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Roles="Admin,Operator">
+            <Authorized>
+                <a class="btn btn-primary" href="tasks/new">
+                    <Icon Name="plus" />新增任務
+                </a>
+            </Authorized>
+        </AuthorizeView>
+    </div>
 </div>
+
+@if (_showBulk)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">@(_bulkEnable ? "批次啟用所有任務" : "批次停用所有任務")</h5>
+                </div>
+                <div class="modal-body">
+                    <p>
+                        將把
+                        @if (_bulkEnable)
+                        {
+                            <span><strong>所有 Disabled 任務 (@(_items?.Count(t => !t.Enabled) ?? 0) 個)</strong> 設為 Enabled</span>
+                        }
+                        else
+                        {
+                            <span><strong>所有 Enabled 任務 (@(_items?.Count(t => t.Enabled) ?? 0) 個)</strong> 設為 Disabled</span>
+                        }
+                        ，並重新註冊 Quartz scheduler。
+                    </p>
+                    <p class="small text-muted">每筆變更都會寫進 audit log。執行中的任務不會被中斷，僅影響未來觸發。</p>
+                    <label class="form-label">操作理由（建議填寫）</label>
+                    <textarea class="form-control" rows="2" @bind="_bulkReason" placeholder="例：來源 DB 維護期間"></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showBulk = false" disabled="@_bulkBusy">取消</button>
+                    <button class="btn @(_bulkEnable ? "btn-success" : "btn-warning")"
+                            @onclick="ConfirmBulk" disabled="@_bulkBusy">
+                        @if (_bulkBusy) { <Icon Name="loader" /> <span>套用中…</span> }
+                        else { <span>確認</span> }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @if (_message is not null)
 {
@@ -164,6 +220,11 @@ else
     private string _reason = "";
     private string? _modalError;
 
+    private bool _showBulk;
+    private bool _bulkEnable;
+    private bool _bulkBusy;
+    private string _bulkReason = "";
+
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthState.GetAuthenticationStateAsync();
@@ -227,6 +288,48 @@ else
         _reason = "";
         _modalError = null;
         _showSubmit = true;
+    }
+
+    private void OpenBulk(bool enable)
+    {
+        _bulkEnable = enable;
+        _bulkReason = "";
+        _showBulk = true;
+    }
+
+    private async Task ConfirmBulk()
+    {
+        if (_items is null || _currentUsername is null) return;
+        _bulkBusy = true;
+        try
+        {
+            var ct = CancellationToken.None;
+            var targets = _items.Where(t => t.Enabled != _bulkEnable).ToList();
+            int changed = 0;
+            foreach (var t in targets)
+            {
+                var full = await TaskRepo.GetWithMappingsAsync(t.Id, ct);
+                if (full is null) continue;
+                full.Enabled = _bulkEnable;
+                await TaskRepo.UpdateAsync(full, ct, actor: _currentUsername);
+                await Scheduler.RescheduleAsync(t.Id, ct);
+                changed++;
+            }
+            _showBulk = false;
+            _isError = false;
+            _message = $"批次{(_bulkEnable ? "啟用" : "停用")}已套用，共 {changed} 個任務" +
+                       (string.IsNullOrWhiteSpace(_bulkReason) ? "" : $"（理由：{_bulkReason}）");
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"批次操作失敗：{ex.Message}";
+        }
+        finally
+        {
+            _bulkBusy = false;
+        }
     }
 
     private async Task ConfirmSubmit()

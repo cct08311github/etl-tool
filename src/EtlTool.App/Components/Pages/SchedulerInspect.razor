@@ -1,0 +1,218 @@
+@page "/scheduler"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+@inject EtlTool.Core.Scheduling.SchedulerService Scheduler
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@implements IDisposable
+
+<PageTitle>排程器檢視</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">排程器檢視</h1>
+    <div class="d-flex gap-2 align-items-center">
+        <small class="text-muted">每 5 秒自動更新</small>
+        <button class="btn btn-sm btn-outline-primary" @onclick="ManualRefresh" disabled="@_loading">
+            @if (_loading) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
+            <span class="ms-1">重新整理</span>
+        </button>
+    </div>
+</div>
+
+@if (_inspection is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-md-3">
+            <div class="stat-card @(_inspection.IsShutdown ? "stat-danger" : (_inspection.InStandby ? "stat-warning" : ""))">
+                <div class="stat-label"><Icon Name="zap" /> 排程器狀態</div>
+                <div class="stat-value">
+                    @(_inspection.IsShutdown ? "Shutdown" : (_inspection.InStandby ? "Standby" : "Running"))
+                </div>
+                <div class="stat-meta text-muted">@_inspection.SchedulerName</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label"><Icon Name="list-checks" /> 註冊 Jobs</div>
+                <div class="stat-value">@_inspection.Jobs.Count</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card @(_inspection.CurrentlyExecuting.Count > 0 ? "stat-success" : "")">
+                <div class="stat-label"><Icon Name="play" /> 執行中</div>
+                <div class="stat-value">@_inspection.CurrentlyExecuting.Count</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="stat-card">
+                <div class="stat-label"><Icon Name="clock" /> 下次觸發</div>
+                <div class="stat-value">@FormatNextFire()</div>
+                <div class="stat-meta text-muted">最近一個</div>
+            </div>
+        </div>
+    </div>
+
+    @if (_inspection.CurrentlyExecuting.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">目前執行中</div>
+            <table class="table mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th>Job</th>
+                        <th>觸發時間</th>
+                        <th>已執行</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in _inspection.CurrentlyExecuting)
+                    {
+                        <tr>
+                            <td><code>@c.JobGroup.@c.JobName</code></td>
+                            <td class="small text-muted">@c.FireTimeUtc.ToLocalTime():HH:mm:ss</td>
+                            <td class="small">
+                                <span class="badge @(c.RunMs > 60_000 ? "bg-warning text-dark" : "bg-success")">
+                                    @FormatMs(c.RunMs)
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <div class="card">
+        <div class="card-header">註冊 Jobs</div>
+        <table class="table mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>Job Key</th>
+                    <th>對應任務</th>
+                    <th>Trigger</th>
+                    <th>狀態</th>
+                    <th>Cron / 描述</th>
+                    <th>上次觸發</th>
+                    <th>下次觸發</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var j in _inspection.Jobs)
+                {
+                    if (j.Triggers.Count == 0)
+                    {
+                        <tr>
+                            <td><code>@j.Group.@j.Name</code></td>
+                            <td>@TaskNameFor(j.TaskId)</td>
+                            <td colspan="5" class="text-muted small">(無 trigger — 任務可能已 Disabled)</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var t in j.Triggers)
+                        {
+                            <tr>
+                                <td><code>@j.Group.@j.Name</code></td>
+                                <td>@TaskNameFor(j.TaskId)</td>
+                                <td><code class="small">@t.Group.@t.Name</code></td>
+                                <td>@TriggerStateBadge(t.State)</td>
+                                <td><code class="small text-muted">@(t.Description ?? "—")</code></td>
+                                <td class="small text-muted">@FormatTime(t.PreviousFireTimeUtc)</td>
+                                <td class="small">@FormatTime(t.NextFireTimeUtc)</td>
+                            </tr>
+                        }
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private EtlTool.Core.Scheduling.SchedulerInspection? _inspection;
+    private Dictionary<Guid, string> _taskNames = new();
+    private bool _loading;
+    private System.Threading.Timer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Refresh();
+        _timer = new System.Threading.Timer(async _ =>
+        {
+            try { await InvokeAsync(Refresh); }
+            catch { /* swallow timer-thread errors */ }
+        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private async Task Refresh()
+    {
+        if (_loading) return;
+        _loading = true;
+        try
+        {
+            _inspection = await Scheduler.InspectAsync(CancellationToken.None);
+            // 只在 task 名稱字典空時抓 — 任務名稱不常變
+            if (_taskNames.Count == 0)
+            {
+                var tasks = await TaskRepo.ListLightweightAsync(CancellationToken.None);
+                _taskNames = tasks.ToDictionary(t => t.Id, t => t.Name);
+            }
+            StateHasChanged();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ManualRefresh()
+    {
+        await Refresh();
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+
+    private string TaskNameFor(Guid? taskId)
+    {
+        if (taskId is null) return "—";
+        return _taskNames.TryGetValue(taskId.Value, out var n) ? n : taskId.Value.ToString()[..8];
+    }
+
+    private string FormatNextFire()
+    {
+        if (_inspection is null) return "—";
+        var allNext = _inspection.Jobs.SelectMany(j => j.Triggers)
+            .Select(t => t.NextFireTimeUtc).Where(d => d.HasValue).ToList();
+        if (allNext.Count == 0) return "—";
+        var next = allNext.Min()!.Value;
+        return next.ToLocalTime().ToString("MM-dd HH:mm");
+    }
+
+    private static string FormatTime(DateTimeOffset? d)
+        => d?.ToLocalTime().ToString("MM-dd HH:mm:ss") ?? "—";
+
+    private static string FormatMs(long ms)
+    {
+        if (ms < 1000) return $"{ms} ms";
+        if (ms < 60_000) return $"{ms / 1000.0:F1} s";
+        var min = ms / 60_000;
+        var s = (ms % 60_000) / 1000;
+        return $"{min}m {s}s";
+    }
+
+    private static MarkupString TriggerStateBadge(string state) => state switch
+    {
+        "Normal" => new MarkupString("<span class=\"badge bg-success\">Normal</span>"),
+        "Paused" => new MarkupString("<span class=\"badge bg-secondary\">Paused</span>"),
+        "Complete" => new MarkupString("<span class=\"badge bg-light text-dark\">Complete</span>"),
+        "Error" => new MarkupString("<span class=\"badge bg-danger\">Error</span>"),
+        "Blocked" => new MarkupString("<span class=\"badge bg-warning text-dark\">Blocked</span>"),
+        _ => new MarkupString($"<span class=\"badge bg-light text-dark\">{state}</span>"),
+    };
+}
