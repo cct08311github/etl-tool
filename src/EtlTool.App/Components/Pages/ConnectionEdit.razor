@@ -1,0 +1,273 @@
+@page "/connections/new"
+@page "/connections/{Id:guid}"
+@rendermode InteractiveServer
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Core.Connectors.IConnectionStringProtector Protector
+@inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory
+@inject NavigationManager Nav
+
+<PageTitle>連線編輯</PageTitle>
+
+<h1>@(Id is null ? "新增連線" : "編輯連線")</h1>
+
+@if (_form is null)
+{
+    <p>載入中...</p>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header">基本資料</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">名稱</label>
+                    <input class="form-control" @bind="_form.Name" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">資料庫類型</label>
+                    <select class="form-select" @bind="_form.ProviderType" @bind:after="OnProviderChanged">
+                        <option value="@DbProviderType.Oracle">Oracle</option>
+                        <option value="@DbProviderType.SqlServer">SQL Server</option>
+                    </select>
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="adv-toggle" @bind="_advancedMode" @bind:after="OnAdvancedToggled" />
+                        <label class="form-check-label" for="adv-toggle">進階：直接編輯連線字串</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (!_advancedMode)
+    {
+        @if (_form.ProviderType == DbProviderType.SqlServer)
+        {
+            <div class="card mb-3">
+                <div class="card-header">SQL Server 設定</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Server (主機)</label>
+                            <input class="form-control" @bind="_sql.Server" @bind:after="RebuildFromFields" />
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Port</label>
+                            <input class="form-control" type="number" min="1" max="65535" @bind="_sql.Port" @bind:after="RebuildFromFields" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Database</label>
+                            <input class="form-control" @bind="_sql.Database" @bind:after="RebuildFromFields" placeholder="例如：master" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">User Id</label>
+                            <input class="form-control" @bind="_sql.UserId" @bind:after="RebuildFromFields" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Password</label>
+                            <input class="form-control" type="password" @bind="_sql.Password" @bind:after="RebuildFromFields" placeholder="@(Id is null ? "" : "(留空表示不變更)")" />
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="sql-trust" @bind="_sql.TrustServerCertificate" @bind:after="RebuildFromFields" />
+                                <label class="form-check-label" for="sql-trust">TrustServerCertificate (信任自簽憑證)</label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="sql-encrypt" @bind="_sql.Encrypt" @bind:after="RebuildFromFields" />
+                                <label class="form-check-label" for="sql-encrypt">Encrypt (傳輸加密)</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="card mb-3">
+                <div class="card-header">Oracle 設定</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Host (主機)</label>
+                            <input class="form-control" @bind="_ora.Host" @bind:after="RebuildFromFields" />
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Port</label>
+                            <input class="form-control" type="number" min="1" max="65535" @bind="_ora.Port" @bind:after="RebuildFromFields" />
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Service Name</label>
+                            <input class="form-control" @bind="_ora.ServiceName" @bind:after="RebuildFromFields" placeholder="例如：XEPDB1" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">User Id</label>
+                            <input class="form-control" @bind="_ora.UserId" @bind:after="RebuildFromFields" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Password</label>
+                            <input class="form-control" type="password" @bind="_ora.Password" @bind:after="RebuildFromFields" placeholder="@(Id is null ? "" : "(留空表示不變更)")" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+
+    <div class="card mb-3">
+        <div class="card-header">連線字串 @(_advancedMode ? "" : "(由上方欄位自動產生)")</div>
+        <div class="card-body">
+            <textarea rows="3" class="form-control font-monospace"
+                      readonly="@(!_advancedMode)"
+                      @bind="_form.ConnectionString"></textarea>
+            @if (Id is not null && !_advancedMode)
+            {
+                <small class="text-muted">編輯模式下若 Password 留空則不變更。</small>
+            }
+        </div>
+    </div>
+
+    <button type="button" class="btn btn-primary" @onclick="Save">儲存</button>
+    <button type="button" class="btn btn-outline-secondary" @onclick="Test">測試連線</button>
+    <a class="btn btn-link" href="connections">取消</a>
+
+    @if (_message is not null)
+    {
+        <div class="alert mt-3 @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    }
+}
+
+@code {
+    [Parameter] public Guid? Id { get; set; }
+
+    private FormModel? _form;
+    private bool _advancedMode;
+    private string? _message;
+    private bool _isError;
+
+    private EtlTool.Connectors.OracleParts _ora = EtlTool.Connectors.ConnectionStringHelper.DefaultOracle();
+    private EtlTool.Connectors.SqlServerParts _sql = EtlTool.Connectors.ConnectionStringHelper.DefaultSqlServer();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Id is null)
+        {
+            _form = new FormModel();
+            RebuildFromFields();
+        }
+        else
+        {
+            var existing = await ConnRepo.GetAsync(Id.Value, CancellationToken.None);
+            if (existing is null) { Nav.NavigateTo("connections"); return; }
+            _form = new FormModel
+            {
+                Name = existing.Name,
+                ProviderType = existing.ProviderType,
+                ConnectionString = "",
+            };
+            // 嘗試解析現有連線字串到欄位（先用未加密？我們不解密以避免外洩 — 純空白由使用者重新填，OR 解密後用 builder 還原）
+            try
+            {
+                var plain = await ConnRepo.GetPlainConnectionStringAsync(Id.Value, Protector, CancellationToken.None);
+                if (existing.ProviderType == DbProviderType.Oracle)
+                {
+                    var p = EtlTool.Connectors.ConnectionStringHelper.TryParseOracle(plain);
+                    if (p is not null) { p.Password = ""; _ora = p; }
+                }
+                else
+                {
+                    var p = EtlTool.Connectors.ConnectionStringHelper.TryParseSqlServer(plain);
+                    if (p is not null) { p.Password = ""; _sql = p; }
+                }
+            }
+            catch { /* 解密失敗 fall through，使用者重新填 */ }
+            RebuildFromFields();
+        }
+    }
+
+    private void OnProviderChanged() => RebuildFromFields();
+
+    private void OnAdvancedToggled()
+    {
+        if (!_advancedMode)
+            RebuildFromFields();
+    }
+
+    private void RebuildFromFields()
+    {
+        if (_form is null || _advancedMode) return;
+        _form.ConnectionString = EtlTool.Connectors.ConnectionStringHelper.Build(
+            _form.ProviderType, _ora, _sql);
+    }
+
+    private async Task Save()
+    {
+        if (_form is null) return;
+        try
+        {
+            if (Id is null)
+            {
+                if (string.IsNullOrWhiteSpace(_form.ConnectionString))
+                {
+                    _isError = true; _message = "請填入連線資訊。";
+                    return;
+                }
+                await ConnRepo.CreateAsync(_form.Name, _form.ProviderType, _form.ConnectionString, Protector, CancellationToken.None);
+            }
+            else
+            {
+                // 編輯時：判斷是否變更連線字串
+                bool passwordEntered = !_advancedMode && (
+                    (_form.ProviderType == DbProviderType.Oracle && !string.IsNullOrEmpty(_ora.Password)) ||
+                    (_form.ProviderType == DbProviderType.SqlServer && !string.IsNullOrEmpty(_sql.Password))
+                );
+                bool advancedEdited = _advancedMode && !string.IsNullOrWhiteSpace(_form.ConnectionString);
+
+                string? newCs = (passwordEntered || advancedEdited) ? _form.ConnectionString : null;
+
+                await ConnRepo.UpdateAsync(Id.Value, _form.Name, _form.ProviderType, newCs, Protector, CancellationToken.None);
+            }
+            Nav.NavigateTo("connections");
+        }
+        catch (Exception ex)
+        {
+            _isError = true; _message = $"儲存失敗：{ex.Message}";
+        }
+    }
+
+    private async Task Test()
+    {
+        if (_form is null) return;
+        try
+        {
+            string plain;
+            if (string.IsNullOrEmpty(_form.ConnectionString))
+            {
+                if (Id is null) { _isError = true; _message = "請先填入連線資訊。"; return; }
+                plain = await ConnRepo.GetPlainConnectionStringAsync(Id.Value, Protector, CancellationToken.None);
+            }
+            else
+            {
+                plain = _form.ConnectionString;
+            }
+            var connector = ConnectorFactory.Create(_form.ProviderType, plain);
+            var ok = await connector.TestConnectionAsync(CancellationToken.None);
+            _isError = !ok;
+            _message = ok ? "連線成功！" : "連線失敗，請檢查設定與網路可達性。";
+        }
+        catch (Exception ex)
+        {
+            _isError = true; _message = $"連線失敗：{ex.Message}";
+        }
+    }
+
+    public class FormModel
+    {
+        public string Name { get; set; } = "";
+        public DbProviderType ProviderType { get; set; } = DbProviderType.SqlServer;
+        public string ConnectionString { get; set; } = "";
+    }
+}

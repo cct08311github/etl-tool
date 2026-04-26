@@ -1,0 +1,200 @@
+@page "/logs"
+@rendermode InteractiveServer
+@inject EtlTool.Data.Repositories.AuditQueryRepository AuditRepo
+
+<PageTitle>活動日誌</PageTitle>
+
+<h1>活動日誌</h1>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-2">
+                <label class="form-label">類別</label>
+                <select class="form-select form-select-sm" @bind="_category" @bind:after="RunQuery">
+                    <option value="">全部</option>
+                    @foreach (var c in Enum.GetValues<AuditCategory>())
+                    {
+                        <option value="@c">@CategoryLabel(c)</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">最低嚴重性</label>
+                <select class="form-select form-select-sm" @bind="_severity" @bind:after="RunQuery">
+                    <option value="">全部</option>
+                    @foreach (var s in Enum.GetValues<AuditSeverity>())
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">起始 (本地)</label>
+                <input type="datetime-local" class="form-control form-control-sm" @bind="_since" @bind:after="RunQuery" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">結束 (本地)</label>
+                <input type="datetime-local" class="form-control form-control-sm" @bind="_until" @bind:after="RunQuery" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">搜尋（訊息 / 目標名稱）</label>
+                <input class="form-control form-control-sm" placeholder="關鍵字…" @bind="_search" @bind:after="RunQuery" />
+            </div>
+            <div class="col-md-1 d-flex gap-1">
+                <button class="btn btn-sm btn-outline-secondary w-100" @onclick="Reset">重置</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p class="text-muted">查詢中…</p>
+}
+else if (_items.Count == 0)
+{
+    <div class="empty-state">
+        <h3>沒有符合條件的事件</h3>
+        <p>調整篩選或縮短時間範圍後再試。</p>
+    </div>
+}
+else
+{
+    <div class="card">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th style="width:160px">時間</th>
+                    <th style="width:90px">類別</th>
+                    <th style="width:90px">動作</th>
+                    <th style="width:80px">嚴重</th>
+                    <th>訊息</th>
+                    <th style="width:140px">目標</th>
+                    <th style="width:80px">由</th>
+                    <th style="width:60px"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var e in _items)
+                {
+                    <tr>
+                        <td><span class="font-monospace text-muted">@e.At.ToLocalTime().ToString("MM-dd HH:mm:ss")</span></td>
+                        <td>@CategoryLabel(e.Category)</td>
+                        <td><span class="text-muted">@e.Action</span></td>
+                        <td><SeverityBadge Severity="@e.Severity" /></td>
+                        <td>@e.Message</td>
+                        <td>
+                            @if (!string.IsNullOrEmpty(e.TargetName))
+                            {
+                                <span class="text-muted small">@e.TargetType:</span> <code>@e.TargetName</code>
+                            }
+                        </td>
+                        <td><span class="text-muted small">@(e.Actor ?? "—")</span></td>
+                        <td>
+                            @if (!string.IsNullOrEmpty(e.DetailsJson))
+                            {
+                                <button class="btn btn-sm btn-link p-0" @onclick="() => ToggleDetails(e.Id)">
+                                    @(_expanded.Contains(e.Id) ? "收合" : "詳情")
+                                </button>
+                            }
+                        </td>
+                    </tr>
+                    @if (_expanded.Contains(e.Id) && !string.IsNullOrEmpty(e.DetailsJson))
+                    {
+                        <tr>
+                            <td colspan="8">
+                                <pre>@e.DetailsJson</pre>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mt-3">
+        <small class="text-muted">共 @_total 筆，顯示 @(_skip + 1)–@Math.Min(_skip + _take, _total)</small>
+        <div class="btn-group">
+            <button class="btn btn-sm btn-outline-secondary" disabled="@(_skip == 0)" @onclick="PrevPage">上一頁</button>
+            <button class="btn btn-sm btn-outline-secondary" disabled="@(_skip + _take >= _total)" @onclick="NextPage">下一頁</button>
+        </div>
+    </div>
+}
+
+@code {
+    private string _category = "";
+    private string _severity = "";
+    private DateTime? _since;
+    private DateTime? _until;
+    private string _search = "";
+
+    private List<AuditEvent> _items = new();
+    private int _total;
+    private int _skip = 0;
+    private const int _take = 50;
+    private bool _loading = true;
+    private HashSet<Guid> _expanded = new();
+
+    protected override Task OnInitializedAsync() => RunQuery();
+
+    private async Task RunQuery()
+    {
+        _loading = true;
+        _skip = 0;
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        var q = new EtlTool.Data.Repositories.AuditQueryRepository.AuditQuery(
+            Since: _since?.ToUniversalTime(),
+            Until: _until?.ToUniversalTime(),
+            Category: Enum.TryParse<AuditCategory>(_category, out var c) ? c : null,
+            MinSeverity: Enum.TryParse<AuditSeverity>(_severity, out var s) ? s : null,
+            Search: string.IsNullOrWhiteSpace(_search) ? null : _search,
+            Skip: _skip,
+            Take: _take);
+
+        var (items, total) = await AuditRepo.ListAsync(q, CancellationToken.None);
+        _items = items;
+        _total = total;
+        _loading = false;
+    }
+
+    private async Task PrevPage()
+    {
+        if (_skip - _take < 0) return;
+        _skip -= _take;
+        await Reload();
+    }
+
+    private async Task NextPage()
+    {
+        if (_skip + _take >= _total) return;
+        _skip += _take;
+        await Reload();
+    }
+
+    private async Task Reset()
+    {
+        _category = ""; _severity = ""; _since = null; _until = null; _search = "";
+        await RunQuery();
+    }
+
+    private void ToggleDetails(Guid id)
+    {
+        if (!_expanded.Add(id)) _expanded.Remove(id);
+    }
+
+    private static string CategoryLabel(AuditCategory c) => c switch
+    {
+        AuditCategory.Connection => "連線",
+        AuditCategory.Task => "任務",
+        AuditCategory.Run => "執行",
+        AuditCategory.Scheduler => "排程",
+        AuditCategory.System => "系統",
+        AuditCategory.Auth => "認證",
+        _ => c.ToString(),
+    };
+}

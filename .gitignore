@@ -1,0 +1,111 @@
+# ============================================================
+# .NET build artifacts
+# ============================================================
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+*.user
+*.userosscache
+*.suo
+*.cache
+*.idb
+*.lastbuildstate
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]uild[Ll]og.*
+
+# ============================================================
+# Publish / packaging
+# ============================================================
+publish/
+PublishScripts/
+*.pubxml.user
+**/Properties/PublishProfiles/
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ============================================================
+# Test results / coverage
+# ============================================================
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+coverage*.info
+.coverage*
+
+# ============================================================
+# ⚠ Secrets & credentials
+# ============================================================
+# 別 commit 的設定檔 — 同名套用全部子目錄
+appsettings.Production.json
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+.env
+.env.*
+!.env.example
+
+# 憑證 / 私鑰
+*.pfx
+*.p12
+*.key
+*.pem
+*.crt
+*.cer
+*.snk
+
+# Data Protection keys（會把連線字串加密；外洩等於失去全部 connection strings 的保護）
+**/keys/
+**/DataProtection-Keys/
+
+# ============================================================
+# ⚠ Runtime data — SQLite app DB / logs / 上傳檔
+# ============================================================
+data/
+**/data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+logs/
+*.log
+etltool-design.db
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+.vs/
+.vscode/
+*.code-workspace
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Claude Code (local-only session data — settings, lock files, etc.)
+# ============================================================
+.claude/
+
+# ============================================================
+# Node / frontend (預留)
+# ============================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -1,0 +1,157 @@
+@code {
+    [Parameter] public EtlTool.Core.Models.FilterMode Mode { get; set; }
+    [Parameter] public EventCallback<EtlTool.Core.Models.FilterMode> ModeChanged { get; set; }
+
+    [Parameter] public string? FormJson { get; set; }
+    [Parameter] public EventCallback<string?> FormJsonChanged { get; set; }
+
+    [Parameter] public string? RawSql { get; set; }
+    [Parameter] public EventCallback<string?> RawSqlChanged { get; set; }
+
+    [Parameter] public IReadOnlyList<EtlTool.Core.Models.ColumnInfo> SourceColumns { get; set; } = Array.Empty<EtlTool.Core.Models.ColumnInfo>();
+
+    private EtlTool.Core.Models.FilterGroup _root = new();
+
+    // 用 string 過渡值好讓 multi-value 條件能 binding 進 textarea
+    private readonly Dictionary<EtlTool.Core.Models.FilterCondition, string> _multiValueText = new();
+
+    protected override void OnParametersSet()
+    {
+        if (Mode == EtlTool.Core.Models.FilterMode.FormBuilder)
+        {
+            try
+            {
+                var parsed = string.IsNullOrEmpty(FormJson)
+                    ? null
+                    : EtlTool.Core.Engine.FilterTreeJson.Deserialize(FormJson);
+                _root = parsed as EtlTool.Core.Models.FilterGroup ?? new EtlTool.Core.Models.FilterGroup();
+            }
+            catch
+            {
+                _root = new EtlTool.Core.Models.FilterGroup();
+            }
+            _multiValueText.Clear();
+            foreach (var c in _root.Children.OfType<EtlTool.Core.Models.FilterCondition>())
+            {
+                if (c.Values is { Count: > 0 })
+                    _multiValueText[c] = string.Join(",", c.Values);
+            }
+        }
+    }
+
+    private async Task PersistForm()
+    {
+        // 把 textarea 過渡值同步回條件
+        foreach (var kv in _multiValueText)
+        {
+            var split = string.IsNullOrWhiteSpace(kv.Value)
+                ? new List<string>()
+                : kv.Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+            kv.Key.Values = split;
+        }
+        var json = EtlTool.Core.Engine.FilterTreeJson.Serialize(_root);
+        FormJson = json;
+        await FormJsonChanged.InvokeAsync(json);
+    }
+
+    private async Task SwitchToForm()
+    {
+        Mode = EtlTool.Core.Models.FilterMode.FormBuilder;
+        await ModeChanged.InvokeAsync(Mode);
+    }
+
+    private async Task SwitchToRaw()
+    {
+        Mode = EtlTool.Core.Models.FilterMode.RawSql;
+        await ModeChanged.InvokeAsync(Mode);
+    }
+
+    private async Task RawChanged() => await RawSqlChanged.InvokeAsync(RawSql);
+
+    private async Task LogicChanged() => await PersistForm();
+
+    private async Task AddCondition()
+    {
+        _root.Children.Add(new EtlTool.Core.Models.FilterCondition());
+        await PersistForm();
+    }
+
+    private async Task RemoveChild(EtlTool.Core.Models.FilterNode child)
+    {
+        _root.Children.Remove(child);
+        if (child is EtlTool.Core.Models.FilterCondition c)
+            _multiValueText.Remove(c);
+        await PersistForm();
+    }
+}
+
+<div class="mb-2">
+    <div class="btn-group" role="group">
+        <button type="button" class="btn @(Mode == EtlTool.Core.Models.FilterMode.FormBuilder ? "btn-primary" : "btn-outline-primary")" @onclick="SwitchToForm">表單模式</button>
+        <button type="button" class="btn @(Mode == EtlTool.Core.Models.FilterMode.RawSql ? "btn-primary" : "btn-outline-primary")" @onclick="SwitchToRaw">進階 SQL</button>
+    </div>
+</div>
+
+@if (Mode == EtlTool.Core.Models.FilterMode.FormBuilder)
+{
+    <div class="border rounded p-2">
+        <div class="mb-2 d-flex align-items-center gap-2">
+            <select class="form-select form-select-sm" style="width: auto" @bind="_root.Logic" @bind:after="LogicChanged">
+                <option value="@EtlTool.Core.Models.FilterLogic.And">AND (全部符合)</option>
+                <option value="@EtlTool.Core.Models.FilterLogic.Or">OR (任一符合)</option>
+            </select>
+            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="AddCondition">+ 條件</button>
+        </div>
+
+        @foreach (var child in _root.Children.OfType<EtlTool.Core.Models.FilterCondition>().ToList())
+        {
+            <div class="row g-2 align-items-center mb-2" @key="child">
+                <div class="col-3">
+                    <select class="form-select form-select-sm" @bind="child.Column" @bind:after="PersistForm">
+                        <option value="">— 欄位 —</option>
+                        @foreach (var c in SourceColumns)
+                        {
+                            <option value="@c.Name">@c.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-2">
+                    <select class="form-select form-select-sm" @bind="child.Operator" @bind:after="PersistForm">
+                        @foreach (var op in Enum.GetValues<EtlTool.Core.Models.FilterOperator>())
+                        {
+                            <option value="@op">@op</option>
+                        }
+                    </select>
+                </div>
+                <div class="col">
+                    @if (child.Operator is EtlTool.Core.Models.FilterOperator.IsNull or EtlTool.Core.Models.FilterOperator.IsNotNull)
+                    {
+                        <span class="text-muted small">無需值</span>
+                    }
+                    else if (child.Operator is EtlTool.Core.Models.FilterOperator.In or EtlTool.Core.Models.FilterOperator.NotIn or EtlTool.Core.Models.FilterOperator.Between)
+                    {
+                        <input class="form-control form-control-sm" placeholder="逗號分隔多值"
+                               @bind="_multiValueText[child]" @bind:after="PersistForm" />
+                    }
+                    else
+                    {
+                        <input class="form-control form-control-sm" placeholder="值"
+                               @bind="child.Value" @bind:after="PersistForm" />
+                    }
+                </div>
+                <div class="col-auto">
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveChild(child)">×</button>
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div>
+        <textarea class="form-control font-monospace" rows="4"
+                  placeholder="WHERE 子句（不含 WHERE 關鍵字），例如：DEPT_ID IN (10, 20) AND HIRE_DATE >= DATE '2024-01-01'"
+                  @bind="RawSql" @bind:after="RawChanged"></textarea>
+        <small class="text-warning">⚠ 進階模式直接拼進 SQL，請信任輸入來源。</small>
+    </div>
+}

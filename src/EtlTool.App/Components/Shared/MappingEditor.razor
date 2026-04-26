@@ -1,0 +1,111 @@
+@code {
+    [Parameter] public List<EtlTool.Core.Models.ColumnMapping> Mappings { get; set; } = new();
+    [Parameter] public IReadOnlyList<EtlTool.Core.Models.ColumnInfo> SourceColumns { get; set; } = Array.Empty<EtlTool.Core.Models.ColumnInfo>();
+    [Parameter] public IReadOnlyList<EtlTool.Core.Models.ColumnInfo> TargetColumns { get; set; } = Array.Empty<EtlTool.Core.Models.ColumnInfo>();
+    [Parameter] public bool ShowKeyColumn { get; set; } = true;
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private async Task Add()
+    {
+        Mappings.Add(new EtlTool.Core.Models.ColumnMapping
+        {
+            SourceColumn = "",
+            TargetColumn = "",
+            OrderIndex = Mappings.Count,
+        });
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task Remove(EtlTool.Core.Models.ColumnMapping m)
+    {
+        Mappings.Remove(m);
+        await OnChanged.InvokeAsync();
+    }
+
+    public async Task AutoMapByName()
+    {
+        Mappings.Clear();
+        var srcByName = SourceColumns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        int idx = 0;
+        foreach (var t in TargetColumns)
+        {
+            if (srcByName.TryGetValue(t.Name, out var s))
+            {
+                Mappings.Add(new EtlTool.Core.Models.ColumnMapping
+                {
+                    SourceColumn = s.Name,
+                    TargetColumn = t.Name,
+                    IsKey = t.IsPrimaryKey,
+                    OrderIndex = idx++,
+                });
+            }
+        }
+        await OnChanged.InvokeAsync();
+    }
+
+    private Task NotifyChanged() => OnChanged.InvokeAsync();
+}
+
+<div class="d-flex gap-2 mb-2">
+    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="AutoMapByName" disabled="@(SourceColumns.Count == 0 || TargetColumns.Count == 0)">同名自動配對</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="Add">+ 新增映射</button>
+</div>
+
+@if (Mappings.Count == 0)
+{
+    <div class="text-muted small">尚未配置映射。請先選好來源/目標表後按「同名自動配對」，或手動新增。</div>
+}
+else
+{
+    <table class="table table-sm align-middle">
+        <thead>
+            <tr>
+                <th style="width: 26%">來源欄位</th>
+                <th style="width: 26%">目標欄位</th>
+                @if (ShowKeyColumn)
+                {
+                    <th style="width: 6%">主鍵?</th>
+                }
+                <th>轉換表達式 (DynamicExpresso，留空＝直接複製)</th>
+                <th style="width: 6%"></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var m in Mappings)
+        {
+            <tr @key="m">
+                <td>
+                    <select class="form-select form-select-sm" @bind="m.SourceColumn" @bind:after="NotifyChanged">
+                        <option value="">— 選擇 —</option>
+                        @foreach (var c in SourceColumns)
+                        {
+                            <option value="@c.Name">@c.Name (@c.DataType)</option>
+                        }
+                    </select>
+                </td>
+                <td>
+                    <select class="form-select form-select-sm" @bind="m.TargetColumn" @bind:after="NotifyChanged">
+                        <option value="">— 選擇 —</option>
+                        @foreach (var c in TargetColumns)
+                        {
+                            <option value="@c.Name">@c.Name (@c.DataType)</option>
+                        }
+                    </select>
+                </td>
+                @if (ShowKeyColumn)
+                {
+                    <td class="text-center">
+                        <input type="checkbox" class="form-check-input" @bind="m.IsKey" @bind:after="NotifyChanged" />
+                    </td>
+                }
+                <td>
+                    <input class="form-control form-control-sm font-monospace" placeholder='row["COL"].ToString().ToUpper()' @bind="m.TransformExpression" @bind:after="NotifyChanged" />
+                </td>
+                <td class="text-end">
+                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => Remove(m)">×</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}

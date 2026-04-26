@@ -1,0 +1,576 @@
+@page "/tasks/new"
+@page "/tasks/{Id:guid}"
+@rendermode InteractiveServer
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory
+@inject EtlTool.Core.Scheduling.SchedulerService Scheduler
+@inject EtlTool.Core.Engine.EtlEngine EtlEngine
+@inject NavigationManager Nav
+
+<PageTitle>編輯任務</PageTitle>
+
+<h1>@(Id is null ? "新增任務" : "編輯任務")</h1>
+
+@if (_task is null || _connections is null)
+{
+    <p>載入中...</p>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-header">基本資料</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">任務名稱</label>
+                    <input class="form-control" @bind="_task.Name" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">啟用</label>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" @bind="_task.Enabled" />
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">批次大小</label>
+                    <input class="form-control" type="number" min="1" max="100000" @bind="_task.BatchSize" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">來源 (Source)</div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <label class="form-label">連線</label>
+                        <select class="form-select" @onchange="OnSourceConnectionChanged">
+                            <option value="">— 選擇 —</option>
+                            @foreach (var c in _connections)
+                            {
+                                <option value="@c.Id" selected="@(c.Id == _task.SourceConnectionId)">@c.Name (@c.ProviderType)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Schema</label>
+                        <select class="form-select" @onchange="OnSourceSchemaChanged">
+                            <option value="">— 選擇 —</option>
+                            @foreach (var s in _sourceSchemas)
+                            {
+                                <option value="@s" selected="@(s == _task.SourceSchema)">@s</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Table</label>
+                        <select class="form-select" @onchange="OnSourceTableChanged">
+                            <option value="">— 選擇 —</option>
+                            @foreach (var t in _sourceTables)
+                            {
+                                <option value="@t" selected="@(t == _task.SourceTable)">@t</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card h-100">
+                <div class="card-header">目標 (Target)</div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <label class="form-label">連線</label>
+                        <select class="form-select" @onchange="OnTargetConnectionChanged">
+                            <option value="">— 選擇 —</option>
+                            @foreach (var c in _connections)
+                            {
+                                <option value="@c.Id" selected="@(c.Id == _task.TargetConnectionId)">@c.Name (@c.ProviderType)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Schema</label>
+                        <select class="form-select" @onchange="OnTargetSchemaChanged">
+                            <option value="">— 選擇 —</option>
+                            @foreach (var s in _targetSchemas)
+                            {
+                                <option value="@s" selected="@(s == _task.TargetSchema)">@s</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Table</label>
+                        <select class="form-select" @onchange="OnTargetTableChanged">
+                            <option value="">— 選擇 —</option>
+                            @foreach (var t in _targetTables)
+                            {
+                                <option value="@t" selected="@(t == _task.TargetTable)">@t</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">寫入模式</div>
+        <div class="card-body">
+            <div class="mb-2">
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="wmode" id="wm-di" checked="@(_task.WriteMode == WriteMode.DeleteInsert)" @onchange="() => _task.WriteMode = WriteMode.DeleteInsert" />
+                    <label class="form-check-label" for="wm-di">
+                        <strong>Delete-Insert</strong>：依條件刪除目標表的資料，再批次插入。一致性高，適合「整批覆蓋同條件資料」。
+                    </label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="wmode" id="wm-up" checked="@(_task.WriteMode == WriteMode.Upsert)" @onchange="() => _task.WriteMode = WriteMode.Upsert" />
+                    <label class="form-check-label" for="wm-up">
+                        <strong>Upsert</strong>：依「主鍵欄位」判斷，存在就更新、不存在就新增（不會刪除目標既有資料）。
+                    </label>
+                </div>
+            </div>
+
+            @if (_task.WriteMode == WriteMode.DeleteInsert)
+            {
+                <div class="mt-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="del-same" @bind="_task.DeleteWhereSameAsFilter" />
+                        <label class="form-check-label" for="del-same">刪除條件＝讀取條件 (常見)</label>
+                    </div>
+                    @if (!_task.DeleteWhereSameAsFilter)
+                    {
+                        <div class="mt-2">
+                            <label class="form-label">自訂刪除 WHERE 子句</label>
+                            <textarea class="form-control font-monospace" rows="2" @bind="_task.DeleteWhereRawSql"></textarea>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">重試政策</div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                執行失敗時自動重試 — 適合處理短暫的網路或 DB 抖動。
+                每次嘗試都會留下獨立的執行紀錄（標示為 <code>Retry</code>）。
+            </p>
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label">最大重試次數</label>
+                    <input type="number" class="form-control" min="0" max="10" @bind="_task.MaxRetries" />
+                    <small class="text-muted">0 = 不重試</small>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">首次延遲 (秒)</label>
+                    <input type="number" class="form-control" min="1" max="3600" @bind="_task.RetryDelaySeconds" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">退避倍數</label>
+                    <input type="number" step="0.5" class="form-control" min="1.0" max="10.0" @bind="_task.RetryBackoffMultiplier" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">實際延遲</label>
+                    <div class="text-muted small font-monospace pt-2">
+                        @if (_task.MaxRetries == 0)
+                        {
+                            <span>—</span>
+                        }
+                        else
+                        {
+                            @ComputeRetryDelays(_task)
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">篩選條件 (來源)</div>
+        <div class="card-body">
+            <FilterBuilder
+                Mode="@_task.FilterMode" ModeChanged="@(v => _task.FilterMode = v)"
+                FormJson="@_task.FilterFormJson" FormJsonChanged="@(v => _task.FilterFormJson = v)"
+                RawSql="@_task.FilterRawSql" RawSqlChanged="@(v => _task.FilterRawSql = v)"
+                SourceColumns="@_sourceColumns" />
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">欄位映射</div>
+        <div class="card-body">
+            <MappingEditor
+                Mappings="@_task.Mappings"
+                SourceColumns="@_sourceColumns"
+                TargetColumns="@_targetColumns"
+                ShowKeyColumn="@(_task.WriteMode == WriteMode.Upsert)"
+                OnChanged="@StateHasChanged" />
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">排程</div>
+        <div class="card-body">
+            <CronEditor Value="@_task.CronExpression" ValueChanged="@(v => _task.CronExpression = v)" />
+        </div>
+    </div>
+
+    @if (_validationErrors.Count > 0)
+    {
+        <div class="alert alert-warning">
+            <strong>請修正以下問題：</strong>
+            <ul class="mb-0">
+                @foreach (var err in _validationErrors)
+                {
+                    <li>@err</li>
+                }
+            </ul>
+        </div>
+    }
+
+    @if (_message is not null)
+    {
+        <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+    }
+
+    <div class="d-flex gap-2">
+        <button class="btn btn-primary" @onclick="Save">儲存</button>
+        <button class="btn btn-outline-info" @onclick="DryRun" disabled="@_dryRunBusy">
+            @(_dryRunBusy ? "預覽中…" : "👀 預覽前 5 筆")
+        </button>
+        <a class="btn btn-link" href="tasks">取消</a>
+    </div>
+
+    @if (_dryRunModal)
+    {
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+            <div class="modal-dialog modal-xl modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">來源資料預覽（最多 5 筆）</h5>
+                        <button type="button" class="btn-close" @onclick="() => _dryRunModal = false"></button>
+                    </div>
+                    <div class="modal-body">
+                        @if (_dryRunError is not null)
+                        {
+                            <div class="alert alert-danger">
+                                <strong>查詢失敗：</strong>
+                                <pre class="mb-0">@_dryRunError</pre>
+                            </div>
+                        }
+                        else if (_dryRunRows is null)
+                        {
+                            <p>查詢中…</p>
+                        }
+                        else if (_dryRunRows.Count == 0)
+                        {
+                            <p class="text-muted">無資料 — 篩選條件下沒有符合的列。</p>
+                        }
+                        else
+                        {
+                            <p class="text-muted small">這是 raw 來源資料（未套用映射轉換）。共顯示 @_dryRunRows.Count 筆。</p>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered">
+                                    <thead>
+                                        <tr>
+                                            @foreach (var k in _dryRunRows[0].Keys) { <th>@k</th> }
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var row in _dryRunRows)
+                                        {
+                                            <tr>
+                                                @foreach (var v in row.Values) { <td>@FormatCell(v)</td> }
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @onclick="() => _dryRunModal = false">關閉</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid? Id { get; set; }
+
+    private EtlTool.Core.Models.EtlTask? _task;
+    private List<EtlTool.Core.Models.ConnectionDefinition>? _connections;
+
+    private List<string> _sourceSchemas = new();
+    private List<string> _sourceTables = new();
+    private List<EtlTool.Core.Models.ColumnInfo> _sourceColumns = new();
+
+    private List<string> _targetSchemas = new();
+    private List<string> _targetTables = new();
+    private List<EtlTool.Core.Models.ColumnInfo> _targetColumns = new();
+
+    private string? _message;
+    private bool _isError;
+    private List<string> _validationErrors = new();
+
+    private bool _dryRunBusy;
+    private bool _dryRunModal;
+    private List<Dictionary<string, object?>>? _dryRunRows;
+    private string? _dryRunError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ct = CancellationToken.None;
+        _connections = await ConnRepo.ListAsync(ct);
+        if (Id is null)
+        {
+            _task = new EtlTool.Core.Models.EtlTask();
+        }
+        else
+        {
+            var existing = await TaskRepo.GetWithMappingsAsync(Id.Value, ct);
+            if (existing is null) { Nav.NavigateTo("tasks"); return; }
+            _task = existing;
+            await ReloadSourceMetadata();
+            await ReloadTargetMetadata();
+        }
+    }
+
+    private async Task OnSourceConnectionChanged(ChangeEventArgs e)
+    {
+        if (_task is null) return;
+        _task.SourceConnectionId = ParseGuid(e.Value);
+        _task.SourceSchema = "";
+        _task.SourceTable = "";
+        await ReloadSourceMetadata();
+    }
+
+    private async Task OnSourceSchemaChanged(ChangeEventArgs e)
+    {
+        if (_task is null) return;
+        _task.SourceSchema = e.Value as string ?? "";
+        _task.SourceTable = "";
+        _sourceTables.Clear();
+        _sourceColumns.Clear();
+        await LoadTablesAsync(_task.SourceConnectionId, _task.SourceSchema, _sourceTables);
+    }
+
+    private async Task OnSourceTableChanged(ChangeEventArgs e)
+    {
+        if (_task is null) return;
+        _task.SourceTable = e.Value as string ?? "";
+        _sourceColumns = new List<EtlTool.Core.Models.ColumnInfo>();
+        if (!string.IsNullOrEmpty(_task.SourceTable))
+        {
+            _sourceColumns = (await LoadColumnsAsync(_task.SourceConnectionId, _task.SourceSchema, _task.SourceTable)).ToList();
+        }
+    }
+
+    private async Task OnTargetConnectionChanged(ChangeEventArgs e)
+    {
+        if (_task is null) return;
+        _task.TargetConnectionId = ParseGuid(e.Value);
+        _task.TargetSchema = "";
+        _task.TargetTable = "";
+        await ReloadTargetMetadata();
+    }
+
+    private async Task OnTargetSchemaChanged(ChangeEventArgs e)
+    {
+        if (_task is null) return;
+        _task.TargetSchema = e.Value as string ?? "";
+        _task.TargetTable = "";
+        _targetTables.Clear();
+        _targetColumns.Clear();
+        await LoadTablesAsync(_task.TargetConnectionId, _task.TargetSchema, _targetTables);
+    }
+
+    private async Task OnTargetTableChanged(ChangeEventArgs e)
+    {
+        if (_task is null) return;
+        _task.TargetTable = e.Value as string ?? "";
+        _targetColumns = new List<EtlTool.Core.Models.ColumnInfo>();
+        if (!string.IsNullOrEmpty(_task.TargetTable))
+        {
+            _targetColumns = (await LoadColumnsAsync(_task.TargetConnectionId, _task.TargetSchema, _task.TargetTable)).ToList();
+        }
+    }
+
+    private async Task ReloadSourceMetadata()
+    {
+        if (_task is null || _task.SourceConnectionId == Guid.Empty) return;
+        _sourceSchemas = (await LoadSchemasAsync(_task.SourceConnectionId)).ToList();
+        if (!string.IsNullOrEmpty(_task.SourceSchema))
+            await LoadTablesAsync(_task.SourceConnectionId, _task.SourceSchema, _sourceTables);
+        if (!string.IsNullOrEmpty(_task.SourceTable))
+            _sourceColumns = (await LoadColumnsAsync(_task.SourceConnectionId, _task.SourceSchema, _task.SourceTable)).ToList();
+    }
+
+    private async Task ReloadTargetMetadata()
+    {
+        if (_task is null || _task.TargetConnectionId == Guid.Empty) return;
+        _targetSchemas = (await LoadSchemasAsync(_task.TargetConnectionId)).ToList();
+        if (!string.IsNullOrEmpty(_task.TargetSchema))
+            await LoadTablesAsync(_task.TargetConnectionId, _task.TargetSchema, _targetTables);
+        if (!string.IsNullOrEmpty(_task.TargetTable))
+            _targetColumns = (await LoadColumnsAsync(_task.TargetConnectionId, _task.TargetSchema, _task.TargetTable)).ToList();
+    }
+
+    private async Task<IReadOnlyList<string>> LoadSchemasAsync(Guid connId)
+    {
+        try
+        {
+            var def = await ConnRepo.GetAsync(connId, CancellationToken.None);
+            if (def is null) return Array.Empty<string>();
+            var connector = ConnectorFactory.Create(def);
+            return await connector.ListSchemasAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"讀取 schema 失敗：{ex.Message}";
+            return Array.Empty<string>();
+        }
+    }
+
+    private async Task LoadTablesAsync(Guid connId, string schema, List<string> target)
+    {
+        target.Clear();
+        if (connId == Guid.Empty || string.IsNullOrEmpty(schema)) return;
+        try
+        {
+            var def = await ConnRepo.GetAsync(connId, CancellationToken.None);
+            if (def is null) return;
+            var connector = ConnectorFactory.Create(def);
+            target.AddRange(await connector.ListTablesAsync(schema, CancellationToken.None));
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"讀取 table 失敗：{ex.Message}";
+        }
+    }
+
+    private async Task<IReadOnlyList<EtlTool.Core.Models.ColumnInfo>> LoadColumnsAsync(Guid connId, string schema, string table)
+    {
+        try
+        {
+            var def = await ConnRepo.GetAsync(connId, CancellationToken.None);
+            if (def is null) return Array.Empty<EtlTool.Core.Models.ColumnInfo>();
+            var connector = ConnectorFactory.Create(def);
+            return await connector.ListColumnsAsync(schema, table, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"讀取 columns 失敗：{ex.Message}";
+            return Array.Empty<EtlTool.Core.Models.ColumnInfo>();
+        }
+    }
+
+    private async Task Save()
+    {
+        if (_task is null) return;
+        _validationErrors = EtlTool.Core.Engine.EtlTaskValidator.Validate(_task);
+        if (_validationErrors.Count > 0)
+        {
+            _message = null;
+            return;
+        }
+
+        try
+        {
+            EtlTool.Core.Models.EtlTask saved;
+            if (Id is null)
+            {
+                saved = await TaskRepo.CreateAsync(_task, CancellationToken.None);
+            }
+            else
+            {
+                saved = await TaskRepo.UpdateAsync(_task, CancellationToken.None);
+            }
+            await Scheduler.RescheduleAsync(saved.Id, CancellationToken.None);
+            Nav.NavigateTo("tasks");
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"儲存失敗：{ex.Message}";
+        }
+    }
+
+    private async Task DryRun()
+    {
+        if (_task is null) return;
+        // 預覽前需要：來源連線/schema/table 已選；mapping 可空（會抓全欄）
+        var basicErrors = new List<string>();
+        if (_task.SourceConnectionId == Guid.Empty) basicErrors.Add("請先選擇來源連線");
+        if (string.IsNullOrEmpty(_task.SourceSchema)) basicErrors.Add("請先選擇來源 Schema");
+        if (string.IsNullOrEmpty(_task.SourceTable)) basicErrors.Add("請先選擇來源 Table");
+        if (basicErrors.Count > 0)
+        {
+            _validationErrors = basicErrors;
+            return;
+        }
+
+        _validationErrors = new();
+        _dryRunBusy = true;
+        _dryRunRows = null;
+        _dryRunError = null;
+        _dryRunModal = true;
+        StateHasChanged();
+        try
+        {
+            _dryRunRows = await EtlEngine.PreviewSourceAsync(_task, 5, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _dryRunError = ex.ToString();
+        }
+        finally
+        {
+            _dryRunBusy = false;
+        }
+    }
+
+    private static string FormatCell(object? v)
+    {
+        if (v is null) return "(null)";
+        if (v is DateTime dt) return dt.ToString("yyyy-MM-dd HH:mm:ss");
+        return v.ToString() ?? "";
+    }
+
+
+    private static Guid ParseGuid(object? value)
+        => Guid.TryParse(value as string, out var g) ? g : Guid.Empty;
+
+    private static string ComputeRetryDelays(EtlTool.Core.Models.EtlTask t)
+    {
+        if (t.MaxRetries <= 0) return "—";
+        var delays = new List<string>();
+        double d = t.RetryDelaySeconds;
+        for (int i = 0; i < t.MaxRetries && i < 5; i++)
+        {
+            delays.Add(FormatSeconds(d));
+            d *= t.RetryBackoffMultiplier;
+        }
+        if (t.MaxRetries > 5) delays.Add("…");
+        return string.Join(" → ", delays);
+    }
+
+    private static string FormatSeconds(double s)
+    {
+        if (s < 60) return $"{s:0}s";
+        if (s < 3600) return $"{s / 60:0.#}m";
+        return $"{s / 3600:0.#}h";
+    }
+}

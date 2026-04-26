@@ -1,0 +1,16 @@
+@code {
+    [Parameter] public RunStatus Status { get; set; }
+}
+
+@switch (Status)
+{
+    case RunStatus.Running:
+        <span class="badge bg-warning">執行中</span>
+        break;
+    case RunStatus.Success:
+        <span class="badge bg-success">成功</span>
+        break;
+    case RunStatus.Failed:
+        <span class="badge bg-danger">失敗</span>
+        break;
+}

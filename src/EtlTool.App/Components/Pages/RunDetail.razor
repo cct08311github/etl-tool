@@ -1,0 +1,88 @@
+@page "/runs/{Id:guid}"
+@rendermode InteractiveServer
+@inject EtlTool.Data.Repositories.RunHistoryRepository RunRepo
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+
+<PageTitle>執行詳情</PageTitle>
+
+@if (_run is null)
+{
+    <p>載入中...</p>
+}
+else
+{
+    <h1>執行詳情</h1>
+    <a class="btn btn-link" href="@($"tasks/{_run.EtlTaskId}/runs")">← 返回此任務歷史</a>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <table class="kv-table">
+                <tr><th>任務</th><td><a href="@($"tasks/{_run.EtlTaskId}")">@(_taskName ?? _run.EtlTaskId.ToString())</a></td></tr>
+                <tr><th>開始時間</th><td><span class="font-monospace">@_run.StartedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</span></td></tr>
+                <tr><th>結束時間</th><td><span class="font-monospace">@(_run.FinishedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—")</span></td></tr>
+                <tr><th>耗時</th><td>@(_run.FinishedAt is null ? "—" : (_run.FinishedAt.Value - _run.StartedAt).ToString(@"hh\:mm\:ss"))</td></tr>
+                <tr><th>狀態</th><td><RunStatusBadge Status="@_run.Status" /></td></tr>
+                <tr><th>觸發類型</th><td>@_run.TriggerType</td></tr>
+                <tr><th>讀取筆數</th><td>@_run.RowsRead</td></tr>
+                <tr><th>寫入筆數</th><td>@_run.RowsWritten</td></tr>
+            </table>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_run.ErrorMessage))
+    {
+        <div class="card mb-3 border-danger">
+            <div class="card-header bg-danger text-white">錯誤訊息</div>
+            <div class="card-body">
+                <pre class="mb-0">@_run.ErrorMessage</pre>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(_run.GeneratedReadSql))
+    {
+        <div class="card mb-3">
+            <div class="card-header">讀取 SQL</div>
+            <div class="card-body">
+                <pre class="mb-0">@_run.GeneratedReadSql</pre>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(_run.GeneratedWriteSql))
+    {
+        <div class="card mb-3">
+            <div class="card-header">寫入 SQL</div>
+            <div class="card-body">
+                <pre class="mb-0">@_run.GeneratedWriteSql</pre>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(_run.SamplePayloadJson))
+    {
+        <div class="card mb-3">
+            <div class="card-header">Sample payload (前 5 筆)</div>
+            <div class="card-body">
+                <pre class="mb-0">@_run.SamplePayloadJson</pre>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private EtlTool.Core.Models.RunHistory? _run;
+    private string? _taskName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ct = CancellationToken.None;
+        _run = await RunRepo.GetAsync(Id, ct);
+        if (_run is not null)
+        {
+            var t = await TaskRepo.GetWithMappingsAsync(_run.EtlTaskId, ct);
+            _taskName = t?.Name;
+        }
+    }
+}

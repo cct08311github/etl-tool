@@ -1,0 +1,115 @@
+@page "/"
+@rendermode InteractiveServer
+@inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+
+<PageTitle>Dashboard</PageTitle>
+
+<h1>Dashboard</h1>
+
+@if (_loading)
+{
+    <p class="text-muted">載入中…</p>
+}
+else
+{
+    <div class="row g-3 mb-4">
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card">
+                <div class="stat-label"><Icon Name="database" /> 連線</div>
+                <div class="stat-value">@_connectionsCount</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card">
+                <div class="stat-label"><Icon Name="list-checks" /> 啟用中任務</div>
+                <div class="stat-value">@_enabledTasksCount<span class="text-muted" style="font-size:1rem;font-weight:400"> / @_tasksCount</span></div>
+            </div>
+        </div>
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card stat-success">
+                <div class="stat-label"><Icon Name="check-circle" /> 近 24h 成功</div>
+                <div class="stat-value">@_recentSuccess</div>
+            </div>
+        </div>
+        <div class="col-md-3 col-sm-6">
+            <div class="stat-card stat-danger">
+                <div class="stat-label"><Icon Name="x-circle" /> 近 24h 失敗</div>
+                <div class="stat-value">@_recentFailed</div>
+            </div>
+        </div>
+    </div>
+
+    <h2 class="mb-3">最近執行</h2>
+    @if (_recentRuns.Count == 0)
+    {
+        <div class="empty-state">
+            <h3>尚無執行紀錄</h3>
+            <p>建立 ETL 任務並按「立即執行」後，這裡會顯示執行歷史。</p>
+        </div>
+    }
+    else
+    {
+        <div class="card">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>任務</th>
+                    <th>開始時間</th>
+                    <th>狀態</th>
+                    <th class="text-end">讀取</th>
+                    <th class="text-end">寫入</th>
+                    <th>觸發</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _recentRuns)
+                {
+                    <tr>
+                        <td>@(_taskNames.TryGetValue(r.EtlTaskId, out var n) ? n : r.EtlTaskId.ToString())</td>
+                        <td>@r.StartedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                        <td><RunStatusBadge Status="@r.Status" /></td>
+                        <td class="text-end">@r.RowsRead</td>
+                        <td class="text-end">@r.RowsWritten</td>
+                        <td>@r.TriggerType</td>
+                        <td><a class="btn btn-sm btn-outline-secondary" href="@($"runs/{r.Id}")">詳情</a></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        </div>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private int _connectionsCount;
+    private int _tasksCount;
+    private int _enabledTasksCount;
+    private int _recentSuccess;
+    private int _recentFailed;
+    private List<EtlTool.Core.Models.RunHistory> _recentRuns = new();
+    private Dictionary<Guid, string> _taskNames = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ct = CancellationToken.None;
+        var conns = await ConnRepo.ListAsync(ct);
+        var tasks = await TaskRepo.ListLightweightAsync(ct);
+        var runs = await RunHistoryRepo.ListRecentAsync(50, ct);
+
+        _connectionsCount = conns.Count;
+        _tasksCount = tasks.Count;
+        _enabledTasksCount = tasks.Count(t => t.Enabled);
+        _taskNames = tasks.ToDictionary(t => t.Id, t => t.Name);
+
+        var since = DateTime.UtcNow.AddHours(-24);
+        _recentSuccess = runs.Count(r => r.StartedAt >= since && r.Status == RunStatus.Success);
+        _recentFailed = runs.Count(r => r.StartedAt >= since && r.Status == RunStatus.Failed);
+        _recentRuns = runs.Take(15).ToList();
+
+        _loading = false;
+    }
+}

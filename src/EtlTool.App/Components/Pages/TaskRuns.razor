@@ -1,0 +1,73 @@
+@page "/tasks/{Id:guid}/runs"
+@rendermode InteractiveServer
+@inject EtlTool.Data.Repositories.RunHistoryRepository RunRepo
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+
+<PageTitle>執行歷史</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">執行歷史 — @(_taskName ?? "…")</h1>
+    <a class="btn btn-outline-secondary" href="tasks">← 返回任務列表</a>
+</div>
+
+@if (_runs is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_runs.Count == 0)
+{
+    <div class="empty-state">
+        <h3>尚無執行紀錄</h3>
+        <p>從任務列表按「立即執行」或等排程觸發後，這裡會顯示每次的詳細結果。</p>
+    </div>
+}
+else
+{
+    <div class="card">
+    <table class="table mb-0 align-middle">
+        <thead>
+            <tr>
+                <th>開始時間</th>
+                <th>結束時間</th>
+                <th>耗時</th>
+                <th>狀態</th>
+                <th class="text-end">讀取</th>
+                <th class="text-end">寫入</th>
+                <th>觸發</th>
+                <th class="text-end">詳情</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var r in _runs)
+        {
+            <tr>
+                <td><span class="font-monospace small">@r.StartedAt.ToLocalTime().ToString("MM-dd HH:mm:ss")</span></td>
+                <td><span class="font-monospace small text-muted">@(r.FinishedAt?.ToLocalTime().ToString("MM-dd HH:mm:ss") ?? "—")</span></td>
+                <td class="small text-muted">@(r.FinishedAt is null ? "—" : (r.FinishedAt.Value - r.StartedAt).ToString(@"hh\:mm\:ss"))</td>
+                <td><RunStatusBadge Status="@r.Status" /></td>
+                <td class="text-end">@r.RowsRead</td>
+                <td class="text-end">@r.RowsWritten</td>
+                <td><span class="text-muted small">@r.TriggerType</span></td>
+                <td class="text-end">
+                    <a class="icon-btn" title="詳情" href="@($"runs/{r.Id}")"><Icon Name="external-link" /></a>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private List<EtlTool.Core.Models.RunHistory>? _runs;
+    private string? _taskName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ct = CancellationToken.None;
+        _runs = await RunRepo.ListByTaskAsync(Id, 100, ct);
+        var task = await TaskRepo.GetWithMappingsAsync(Id, ct);
+        _taskName = task?.Name;
+    }
+}

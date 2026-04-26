@@ -1,0 +1,73 @@
+@code {
+    [Parameter] public string Value { get; set; } = "0 0 * * * ?";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private static readonly (string Label, string Cron)[] Presets =
+    {
+        ("每 5 分鐘", "0 0/5 * * * ?"),
+        ("每小時整點", "0 0 * * * ?"),
+        ("每天 02:00", "0 0 2 * * ?"),
+        ("每週一 03:00", "0 0 3 ? * MON"),
+        ("自訂", ""),
+    };
+
+    private string _selectedPreset = "";
+    private string? _nextFireDescription;
+
+    protected override void OnParametersSet()
+    {
+        _selectedPreset = Presets.FirstOrDefault(p => p.Cron == Value).Cron ?? "";
+        ComputeNext();
+    }
+
+    private async Task OnPresetChange(ChangeEventArgs e)
+    {
+        var v = (string)e.Value!;
+        _selectedPreset = v;
+        if (!string.IsNullOrEmpty(v))
+        {
+            Value = v;
+            await ValueChanged.InvokeAsync(v);
+            ComputeNext();
+        }
+    }
+
+    private async Task OnCustomChange(ChangeEventArgs e)
+    {
+        var v = (string)e.Value!;
+        Value = v;
+        _selectedPreset = "";
+        await ValueChanged.InvokeAsync(v);
+        ComputeNext();
+    }
+
+    private void ComputeNext()
+    {
+        try
+        {
+            var expr = new Quartz.CronExpression(Value);
+            var next = expr.GetNextValidTimeAfter(DateTimeOffset.UtcNow);
+            _nextFireDescription = next?.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+        catch (Exception ex)
+        {
+            _nextFireDescription = $"無效：{ex.Message}";
+        }
+    }
+}
+
+<div class="mb-2">
+    <label class="form-label">預設排程</label>
+    <select class="form-select" value="@_selectedPreset" @onchange="OnPresetChange">
+        <option value="">— 選擇預設或自訂 —</option>
+        @foreach (var p in Presets.Where(p => !string.IsNullOrEmpty(p.Cron)))
+        {
+            <option value="@p.Cron">@p.Label (@p.Cron)</option>
+        }
+    </select>
+</div>
+<div class="mb-2">
+    <label class="form-label">Cron 表達式 (Quartz 格式：秒 分 時 日 月 週)</label>
+    <input class="form-control font-monospace" value="@Value" @onchange="OnCustomChange" />
+    <small class="text-muted">下次觸發 (本地)：@(_nextFireDescription ?? "—")</small>
+</div>

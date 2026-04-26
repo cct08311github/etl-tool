@@ -1,0 +1,26 @@
+@inherits LayoutComponentBase
+
+<div class="page">
+    <aside class="sidebar">
+        <NavMenu />
+    </aside>
+
+    <main class="main">
+        <div class="topbar">
+            <div class="topbar-title">ETL Tool</div>
+            <div class="topbar-actions">
+                <a class="topbar-link" href="https://github.com/your-org/etl-tool/blob/main/DEPLOYMENT.md" target="_blank" rel="noopener">部署文件</a>
+            </div>
+        </div>
+
+        <div class="content">
+            @Body
+        </div>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    發生錯誤。
+    <a href="." class="reload">重新載入</a>
+    <span class="dismiss">×</span>
+</div>

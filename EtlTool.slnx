@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EtlTool.App/EtlTool.App.csproj" />
+    <Project Path="src/EtlTool.Connectors/EtlTool.Connectors.csproj" />
+    <Project Path="src/EtlTool.Core/EtlTool.Core.csproj" />
+    <Project Path="src/EtlTool.Data/EtlTool.Data.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EtlTool.IntegrationTests/EtlTool.IntegrationTests.csproj" />
+    <Project Path="tests/EtlTool.Tests/EtlTool.Tests.csproj" />
+  </Folder>
+</Solution>

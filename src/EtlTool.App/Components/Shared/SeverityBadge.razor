@@ -1,0 +1,16 @@
+@code {
+    [Parameter] public AuditSeverity Severity { get; set; }
+}
+
+@switch (Severity)
+{
+    case AuditSeverity.Info:
+        <span class="badge bg-primary">Info</span>
+        break;
+    case AuditSeverity.Warning:
+        <span class="badge bg-warning">Warning</span>
+        break;
+    case AuditSeverity.Error:
+        <span class="badge bg-danger">Error</span>
+        break;
+}

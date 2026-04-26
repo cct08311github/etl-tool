@@ -1,0 +1,41 @@
+<div class="brand">
+    <div class="brand-mark">
+        <Icon Name="zap" />
+    </div>
+    <div class="brand-text">
+        <div class="brand-name">EtlTool</div>
+        <div class="brand-sub">資料管線</div>
+    </div>
+</div>
+
+<nav class="nav-list">
+    <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
+        <Icon Name="home" /><span>Dashboard</span>
+    </NavLink>
+    <NavLink class="nav-item" href="connections">
+        <Icon Name="database" /><span>連線管理</span>
+    </NavLink>
+    <NavLink class="nav-item" href="tasks">
+        <Icon Name="list-checks" /><span>ETL 任務</span>
+    </NavLink>
+    <NavLink class="nav-item" href="logs">
+        <Icon Name="history" /><span>活動日誌</span>
+    </NavLink>
+</nav>
+
+<div class="nav-footer">
+    <AuthorizeView>
+        <Authorized>
+            <div class="user-row">
+                <div class="user-avatar">@(context.User.Identity?.Name?.Substring(0, 1).ToUpper() ?? "?")</div>
+                <div class="user-info">
+                    <div class="user-name">@context.User.Identity?.Name</div>
+                    <a class="user-logout" href="/Account/Logout">登出</a>
+                </div>
+            </div>
+        </Authorized>
+    </AuthorizeView>
+    <a class="nav-item nav-item-sm" href="/healthz" target="_blank" rel="noopener">
+        <Icon Name="activity" /><span>Health</span>
+    </a>
+</div>

@@ -1,0 +1,150 @@
+@page "/tasks"
+@rendermode InteractiveServer
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Core.Scheduling.SchedulerService Scheduler
+
+<PageTitle>ETL 任務</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">ETL 任務</h1>
+    <a class="btn btn-primary" href="tasks/new">
+        <Icon Name="plus" />新增任務
+    </a>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert alert-info">@_message</div>
+}
+
+@if (_items is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_items.Count == 0)
+{
+    <div class="empty-state">
+        <h3>尚無任務</h3>
+        <p>建立第一個 ETL 任務，把資料從來源 A 表搬到目標 B 表。</p>
+        <a class="btn btn-primary mt-2" href="tasks/new"><Icon Name="plus" />新增任務</a>
+    </div>
+}
+else
+{
+    <div class="card">
+    <table class="table mb-0 align-middle">
+        <thead>
+            <tr>
+                <th>名稱</th>
+                <th>方向</th>
+                <th>模式</th>
+                <th>排程</th>
+                <th>下次執行</th>
+                <th>啟用</th>
+                <th class="text-end">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var t in _items)
+        {
+            <tr>
+                <td><a href="@($"tasks/{t.Id}")" class="fw-medium">@t.Name</a></td>
+                <td>
+                    <code class="text-muted">@t.SourceSchema.@t.SourceTable</code>
+                    <Icon Name="arrow-right" Class="text-subtle mx-1" />
+                    <code class="text-muted">@t.TargetSchema.@t.TargetTable</code>
+                </td>
+                <td>
+                    <span class="badge @(t.WriteMode == WriteMode.Upsert ? "bg-info" : "bg-primary")">@t.WriteMode</span>
+                </td>
+                <td><code class="text-muted small">@t.CronExpression</code></td>
+                <td class="small text-muted">
+                    @(_nextFire.TryGetValue(t.Id, out var n) && n.HasValue
+                        ? n.Value.ToLocalTime().ToString("MM-dd HH:mm")
+                        : "—")
+                </td>
+                <td>
+                    <div class="form-check form-switch m-0">
+                        <input type="checkbox" class="form-check-input" checked="@t.Enabled"
+                               @onchange="e => ToggleEnabled(t, (bool)e.Value!)" />
+                    </div>
+                </td>
+                <td class="text-end">
+                    <div class="row-actions">
+                        <button class="icon-btn icon-btn-success" title="立即執行"
+                                @onclick="() => RunNow(t.Id)" disabled="@(_running == t.Id)">
+                            @if (_running == t.Id) { <Icon Name="loader" /> }
+                            else { <Icon Name="play" /> }
+                        </button>
+                        <a class="icon-btn" title="執行歷史" href="@($"tasks/{t.Id}/runs")"><Icon Name="history" /></a>
+                        <a class="icon-btn" title="編輯" href="@($"tasks/{t.Id}")"><Icon Name="edit" /></a>
+                        <button class="icon-btn icon-btn-danger" title="刪除"
+                                @onclick="() => Delete(t.Id)">
+                            <Icon Name="trash" />
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    </div>
+}
+
+@code {
+    private List<EtlTool.Core.Models.EtlTask>? _items;
+    private Dictionary<Guid, DateTimeOffset?> _nextFire = new();
+    private Guid? _running;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        var ct = CancellationToken.None;
+        _items = await TaskRepo.ListLightweightAsync(ct);
+        _nextFire.Clear();
+        foreach (var t in _items)
+        {
+            try { _nextFire[t.Id] = await Scheduler.GetNextFireTimeAsync(t.Id, ct); }
+            catch { _nextFire[t.Id] = null; }
+        }
+    }
+
+    private async Task ToggleEnabled(EtlTool.Core.Models.EtlTask task, bool enabled)
+    {
+        task.Enabled = enabled;
+        var full = await TaskRepo.GetWithMappingsAsync(task.Id, CancellationToken.None);
+        if (full is null) return;
+        full.Enabled = enabled;
+        await TaskRepo.UpdateAsync(full, CancellationToken.None);
+        await Scheduler.RescheduleAsync(task.Id, CancellationToken.None);
+        await Reload();
+    }
+
+    private async Task RunNow(Guid id)
+    {
+        _running = id;
+        _message = null;
+        try
+        {
+            await Scheduler.TriggerNowAsync(id, CancellationToken.None);
+            _message = "已觸發手動執行，請至「歷史」查看結果。";
+        }
+        catch (Exception ex)
+        {
+            _message = $"觸發失敗：{ex.Message}";
+        }
+        finally
+        {
+            _running = null;
+        }
+    }
+
+    private async Task Delete(Guid id)
+    {
+        await Scheduler.UnscheduleAsync(id, CancellationToken.None);
+        await TaskRepo.DeleteAsync(id, CancellationToken.None);
+        await Reload();
+    }
+}

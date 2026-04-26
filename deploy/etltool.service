@@ -1,0 +1,45 @@
+[Unit]
+Description=ETL Tool (Oracle <-> MSSQL scheduler)
+Documentation=https://github.com/your-org/etl-tool/blob/main/DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=etltool
+Group=etltool
+WorkingDirectory=/opt/etltool
+ExecStart=/opt/etltool/EtlTool.App
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# 日誌走 systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=etltool
+
+# 環境變數（依實際路徑/port 調整）
+Environment=ASPNETCORE_URLS=http://0.0.0.0:5247
+Environment=ETLTOOL_DATA_DIR=/var/lib/etltool
+Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+# Hardening — 限縮服務可存取的檔案系統與權限
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/etltool
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
