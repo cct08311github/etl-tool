@@ -166,10 +166,26 @@ public sealed class EtlEngine
                 }
                 await FlushAsync();
 
+                // Row count assertion — commit 之前檢查；Fail → throw 觸發 rollback
+                var rowCheck = RowCountAssertion.Check(rowsRead, task.MinExpectedRows, task.MaxExpectedRows, task.RowCountPolicy);
+                if (!rowCheck.Passed && task.RowCountPolicy == RowCountAssertionPolicy.Fail)
+                {
+                    throw new InvalidOperationException($"Row count assertion 失敗（policy=Fail）：{rowCheck.Violation}");
+                }
+
                 await tx.CommitAsync(ct);
 
                 run.RowsRead = rowsRead;
                 run.RowsWritten = rowsWritten;
+
+                // Warn 模式違反 → commit 後 audit warning（Fail 模式已透過 throw 走例外路徑）
+                if (!rowCheck.Passed && task.RowCountPolicy == RowCountAssertionPolicy.Warn && _audit is not null)
+                {
+                    await _audit.LogAsync(AuditCategory.Run, AuditAction.RunSucceeded,
+                        $"⚠ 任務「{task.Name}」row count 警告：{rowCheck.Violation}（policy=Warn 仍 commit）",
+                        targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                        severity: AuditSeverity.Warning, ct: ct);
+                }
                 run.SamplePayloadJson = JsonSerializer.Serialize(samplePayload);
                 run.Status = RunStatus.Success;
                 run.FinishedAt = DateTime.UtcNow;

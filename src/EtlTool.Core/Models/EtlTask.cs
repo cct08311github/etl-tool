@@ -71,6 +71,16 @@ public class EtlTask
     /// <summary>快照建立時間（UTC）。</summary>
     public DateTime? SchemaSnapshotAt { get; set; }
 
+    /// <summary>讀取最少筆數；null = 不檢查。</summary>
+    public long? MinExpectedRows { get; set; }
+
+    /// <summary>讀取最多筆數；null = 不檢查。</summary>
+    public long? MaxExpectedRows { get; set; }
+
+    /// <summary>row count 斷言違反時的處置：Ignore / Warn / Fail (rollback)。</summary>
+    public EtlTool.Core.Engine.RowCountAssertionPolicy RowCountPolicy { get; set; }
+        = EtlTool.Core.Engine.RowCountAssertionPolicy.Warn;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

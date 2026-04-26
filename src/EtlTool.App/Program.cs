@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
+using Prometheus;
 using Quartz;
 using Serilog;
 
@@ -122,9 +123,11 @@ builder.Services.AddQuartzHostedService(opt => { opt.WaitForJobsToComplete = tru
 // Migrations + scheduler bootstrap
 builder.Services.AddHostedService<StartupBootstrapper>();
 
-// Banking-grade reliability: nightly audit retention + periodic connection health
+// Banking-grade reliability: nightly retention + periodic health + Prometheus metrics
 builder.Services.AddHostedService<AuditRetentionService>();
+builder.Services.AddHostedService<RunHistoryRetentionService>();
 builder.Services.AddHostedService<ConnectionHealthMonitor>();
+builder.Services.AddHostedService<MetricsScraperService>();
 
 // Authentication / Authorization
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
@@ -199,6 +202,7 @@ app.UseAntiforgery();
 // 否則登入頁本身的樣式會破版且 favicon / blazor.web.js 會被導向回登入頁。
 app.MapStaticAssets().AllowAnonymous();
 app.MapHealthChecks("/healthz").AllowAnonymous();
+app.MapMetrics("/metrics").AllowAnonymous();   // Prometheus scrape endpoint (banks 應在 ingress / firewall 限制來源 IP)
 app.MapRazorPages();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

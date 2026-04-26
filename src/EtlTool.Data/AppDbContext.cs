@@ -35,6 +35,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.WriteMode).HasConversion<int>();
             e.Property(x => x.FilterMode).HasConversion<int>();
             e.Property(x => x.SchemaDriftPolicy).HasConversion<int>();
+            e.Property(x => x.RowCountPolicy).HasConversion<int>();
             e.Property(x => x.CronExpression).HasMaxLength(100).IsRequired();
             e.HasMany(x => x.Mappings)
                 .WithOne()

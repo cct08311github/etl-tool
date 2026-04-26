@@ -237,6 +237,48 @@ else
     </div>
 
     <div class="card mb-3">
+        <div class="card-header">資料量斷言 (Row Count Assertion)</div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">
+                預期讀取的最少 / 最多筆數。違反時依政策處理，可避免「上游空表 silently 寫 0 筆」之類問題。
+            </p>
+            <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">最少筆數 (≥)</label>
+                    <input type="number" class="form-control" min="0" placeholder="不限"
+                           @bind="_task.MinExpectedRows" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">最多筆數 (≤)</label>
+                    <input type="number" class="form-control" min="0" placeholder="不限"
+                           @bind="_task.MaxExpectedRows" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label d-block">違反時</label>
+                    <div class="form-check form-check-inline">
+                        <input type="radio" class="form-check-input" id="rc-ignore" name="rcpol"
+                               checked="@(_task.RowCountPolicy == EtlTool.Core.Engine.RowCountAssertionPolicy.Ignore)"
+                               @onchange="() => _task.RowCountPolicy = EtlTool.Core.Engine.RowCountAssertionPolicy.Ignore" />
+                        <label class="form-check-label" for="rc-ignore">不檢查</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input type="radio" class="form-check-input" id="rc-warn" name="rcpol"
+                               checked="@(_task.RowCountPolicy == EtlTool.Core.Engine.RowCountAssertionPolicy.Warn)"
+                               @onchange="() => _task.RowCountPolicy = EtlTool.Core.Engine.RowCountAssertionPolicy.Warn" />
+                        <label class="form-check-label" for="rc-warn">仍寫入 + 警告</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input type="radio" class="form-check-input" id="rc-fail" name="rcpol"
+                               checked="@(_task.RowCountPolicy == EtlTool.Core.Engine.RowCountAssertionPolicy.Fail)"
+                               @onchange="() => _task.RowCountPolicy = EtlTool.Core.Engine.RowCountAssertionPolicy.Fail" />
+                        <label class="form-check-label" for="rc-fail">Fail (rollback)</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
         <div class="card-header">Schema 漂移偵測 (banking 等級資料完整性檢查)</div>
         <div class="card-body">
             <p class="text-muted small mb-2">
