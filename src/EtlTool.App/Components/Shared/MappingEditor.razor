@@ -5,6 +5,9 @@
     [Parameter] public bool ShowKeyColumn { get; set; } = true;
     [Parameter] public EventCallback OnChanged { get; set; }
 
+    private string? _autoMapMessage;
+    private bool _autoMapIsWarning;
+
     private async Task Add()
     {
         Mappings.Add(new EtlTool.Core.Models.ColumnMapping
@@ -13,20 +16,36 @@
             TargetColumn = "",
             OrderIndex = Mappings.Count,
         });
+        _autoMapMessage = null;
         await OnChanged.InvokeAsync();
+        StateHasChanged();
     }
 
     private async Task Remove(EtlTool.Core.Models.ColumnMapping m)
     {
         Mappings.Remove(m);
         await OnChanged.InvokeAsync();
+        StateHasChanged();
     }
 
     public async Task AutoMapByName()
     {
+        if (SourceColumns.Count == 0 || TargetColumns.Count == 0)
+        {
+            _autoMapMessage = "尚未載入來源 / 目標欄位 — 請先選好兩邊的 Schema 與 Table";
+            _autoMapIsWarning = true;
+            StateHasChanged();
+            return;
+        }
+
+        // 處理可能的重複欄位名（防止 ToDictionary 拋例外）
+        var srcByName = new Dictionary<string, EtlTool.Core.Models.ColumnInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in SourceColumns)
+            srcByName[c.Name] = c; // 同名後者覆蓋前者；正常表不會發生
+
         Mappings.Clear();
-        var srcByName = SourceColumns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
         int idx = 0;
+        var unmatched = new List<string>();
         foreach (var t in TargetColumns)
         {
             if (srcByName.TryGetValue(t.Name, out var s))
@@ -39,17 +58,58 @@
                     OrderIndex = idx++,
                 });
             }
+            else
+            {
+                unmatched.Add(t.Name);
+            }
         }
+
+        if (Mappings.Count == 0)
+        {
+            _autoMapMessage = $"找不到同名欄位 — 來源 {SourceColumns.Count} 欄、目標 {TargetColumns.Count} 欄。"
+                + " 請按「+ 新增映射」手動配對。";
+            _autoMapIsWarning = true;
+        }
+        else if (unmatched.Count == 0)
+        {
+            _autoMapMessage = $"已配對 {Mappings.Count} 條（全部目標欄位都找到了同名來源）";
+            _autoMapIsWarning = false;
+        }
+        else
+        {
+            _autoMapMessage = $"已配對 {Mappings.Count} 條；目標表還有 {unmatched.Count} 欄沒對到："
+                + string.Join(", ", unmatched.Take(10))
+                + (unmatched.Count > 10 ? $" …+{unmatched.Count - 10}" : "");
+            _autoMapIsWarning = false;
+        }
+
         await OnChanged.InvokeAsync();
+        StateHasChanged();
     }
 
     private Task NotifyChanged() => OnChanged.InvokeAsync();
 }
 
-<div class="d-flex gap-2 mb-2">
-    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="AutoMapByName" disabled="@(SourceColumns.Count == 0 || TargetColumns.Count == 0)">同名自動配對</button>
+<div class="d-flex gap-2 mb-2 align-items-center">
+    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="AutoMapByName"
+            disabled="@(SourceColumns.Count == 0 || TargetColumns.Count == 0)"
+            title="@(SourceColumns.Count == 0 || TargetColumns.Count == 0
+                    ? "請先選好來源/目標的 Schema 與 Table"
+                    : $"來源 {SourceColumns.Count} 欄、目標 {TargetColumns.Count} 欄")">
+        同名自動配對
+    </button>
     <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="Add">+ 新增映射</button>
+    <span class="text-muted small ms-2">
+        來源 @SourceColumns.Count 欄 · 目標 @TargetColumns.Count 欄 · 已配 @Mappings.Count 條
+    </span>
 </div>
+
+@if (_autoMapMessage is not null)
+{
+    <div class="alert @(_autoMapIsWarning ? "alert-warning" : "alert-info") py-2 mb-2 small">
+        @_autoMapMessage
+    </div>
+}
 
 @if (Mappings.Count == 0)
 {

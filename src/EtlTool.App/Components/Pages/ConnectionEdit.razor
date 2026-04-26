@@ -219,14 +219,33 @@ else
             }
             else
             {
-                // 編輯時：判斷是否變更連線字串
-                bool passwordEntered = !_advancedMode && (
-                    (_form.ProviderType == DbProviderType.Oracle && !string.IsNullOrEmpty(_ora.Password)) ||
-                    (_form.ProviderType == DbProviderType.SqlServer && !string.IsNullOrEmpty(_sql.Password))
-                );
-                bool advancedEdited = _advancedMode && !string.IsNullOrWhiteSpace(_form.ConnectionString);
+                // 編輯時：總是嘗試更新連線字串（不論使用者是否重輸密碼）
+                string? newCs = null;
 
-                string? newCs = (passwordEntered || advancedEdited) ? _form.ConnectionString : null;
+                if (_advancedMode)
+                {
+                    // 進階：只有 textarea 非空時更新
+                    if (!string.IsNullOrWhiteSpace(_form.ConnectionString))
+                        newCs = _form.ConnectionString;
+                }
+                else
+                {
+                    // 友善欄位：永遠用欄位重新組 CS。
+                    // 若 Password 留空 → 自既有 CS 取出 password merge 回來，避免被清空。
+                    if (_form.ProviderType == DbProviderType.SqlServer && string.IsNullOrEmpty(_sql.Password))
+                    {
+                        var existingCs = await ConnRepo.GetPlainConnectionStringAsync(Id.Value, Protector, CancellationToken.None);
+                        var parsed = EtlTool.Connectors.ConnectionStringHelper.TryParseSqlServer(existingCs);
+                        if (parsed is not null) _sql.Password = parsed.Password;
+                    }
+                    else if (_form.ProviderType == DbProviderType.Oracle && string.IsNullOrEmpty(_ora.Password))
+                    {
+                        var existingCs = await ConnRepo.GetPlainConnectionStringAsync(Id.Value, Protector, CancellationToken.None);
+                        var parsed = EtlTool.Connectors.ConnectionStringHelper.TryParseOracle(existingCs);
+                        if (parsed is not null) _ora.Password = parsed.Password;
+                    }
+                    newCs = EtlTool.Connectors.ConnectionStringHelper.Build(_form.ProviderType, _ora, _sql);
+                }
 
                 await ConnRepo.UpdateAsync(Id.Value, _form.Name, _form.ProviderType, newCs, Protector, CancellationToken.None);
             }
