@@ -222,6 +222,31 @@ else
         </div>
     </div>
 
+    <div class="card mb-3">
+        <div class="card-header">完成後呼叫 Stored Procedure (可選)</div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                ETL 寫入完成後在<strong>目標 DB</strong> 呼叫指定的 stored procedure。
+                SP 會收到標準參數：<code>task_id</code>, <code>task_name</code>, <code>run_id</code>, <code>status</code>,
+                <code>rows_read</code>, <code>rows_written</code>, <code>started_at</code>, <code>finished_at</code>,
+                <code>error_message</code>, <code>trigger_type</code>。
+                SP 失敗不會 rollback 已寫入的資料，僅在執行紀錄記下錯誤。
+            </p>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label">成功後 SP（schema.name）</label>
+                    <input class="form-control font-monospace" placeholder="例如 dbo.OnEtlSucceeded"
+                           @bind="_task.PostSuccessSp" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">失敗後 SP（schema.name）</label>
+                    <input class="form-control font-monospace" placeholder="例如 dbo.OnEtlFailed"
+                           @bind="_task.PostFailureSp" />
+                </div>
+            </div>
+        </div>
+    </div>
+
     @if (_validationErrors.Count > 0)
     {
         <div class="alert alert-warning">

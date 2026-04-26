@@ -161,6 +161,12 @@ public sealed class EtlEngine
                 run.FinishedAt = DateTime.UtcNow;
                 await _runSink.PersistAsync(run, ct);
 
+                // Post-success SP（commit 之後才呼叫；失敗只 log，不影響 ETL 已成功狀態）
+                if (!string.IsNullOrWhiteSpace(task.PostSuccessSp))
+                {
+                    await InvokePostRunSpAsync(targetConnector, tgtConn, task, task.PostSuccessSp!, run, ct);
+                }
+
                 _log.LogInformation("ETL {TaskName} ({TaskId}) succeeded: read={Read} written={Written}",
                     task.Name, task.Id, rowsRead, rowsWritten);
                 if (_audit is not null)
@@ -184,6 +190,25 @@ public sealed class EtlEngine
             run.ErrorMessage = ex.ToString();
             await _runSink.PersistAsync(run, CancellationToken.None);
             _log.LogError(ex, "ETL {TaskName} ({TaskId}) failed", task.Name, task.Id);
+
+            // Post-failure SP（best-effort，需重新建立連線因為原來那條已 rollback / dispose）
+            if (!string.IsNullOrWhiteSpace(task.PostFailureSp))
+            {
+                try
+                {
+                    var failConnDef = await _connectionLookup.GetAsync(task.TargetConnectionId, CancellationToken.None);
+                    if (failConnDef is not null)
+                    {
+                        var failConnector = _factory.Create(failConnDef);
+                        await using var failConn = await failConnector.OpenAsync(CancellationToken.None);
+                        await InvokePostRunSpAsync(failConnector, failConn, task, task.PostFailureSp!, run, CancellationToken.None);
+                    }
+                }
+                catch (Exception spEx)
+                {
+                    _log.LogError(spEx, "Post-failure SP {Sp} for task {TaskName} threw", task.PostFailureSp, task.Name);
+                }
+            }
             if (_audit is not null)
                 await _audit.LogAsync(AuditCategory.Run, AuditAction.RunFailed,
                     $"任務「{task.Name}」執行失敗：{ex.Message}",
@@ -325,6 +350,65 @@ public sealed class EtlEngine
 
     private static string AppendSql(string? existing, string add)
         => string.IsNullOrEmpty(existing) ? add : existing + "\n\n" + add;
+
+    /// <summary>
+    /// 呼叫使用者設定的 stored procedure（在目標 DB 上）。
+    /// 標準參數（命名一律小寫底線，無前綴；連接器自動加 ":" 或 "@"）：
+    ///   task_id        Guid (string)    任務 ID
+    ///   task_name      string           任務名稱
+    ///   run_id         Guid (string)    本次 RunHistory ID
+    ///   status         string           "Success" / "Failed"
+    ///   rows_read      long             讀取筆數
+    ///   rows_written   long             寫入筆數
+    ///   started_at     DateTime         UTC 開始時間
+    ///   finished_at    DateTime         UTC 結束時間
+    ///   error_message  string?          錯誤訊息（成功時 null / 空字串）
+    ///   trigger_type   string           "Scheduled" / "Manual" / "Retry"
+    /// SP 簽章範例（SQL Server）：
+    ///   CREATE PROCEDURE dbo.OnEtlCompleted
+    ///       @task_id NVARCHAR(50), @task_name NVARCHAR(100),
+    ///       @run_id NVARCHAR(50), @status NVARCHAR(16),
+    ///       @rows_read BIGINT, @rows_written BIGINT,
+    ///       @started_at DATETIME2, @finished_at DATETIME2,
+    ///       @error_message NVARCHAR(MAX) = NULL,
+    ///       @trigger_type NVARCHAR(16) = NULL
+    ///   AS BEGIN ... END
+    /// </summary>
+    private async Task InvokePostRunSpAsync(
+        IDbConnector connector, DbConnection conn,
+        EtlTask task, string spName, RunHistory run, CancellationToken ct)
+    {
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandType = CommandType.StoredProcedure;
+            cmd.CommandText = spName;
+            cmd.CommandTimeout = 60;
+
+            cmd.Parameters.Add(connector.CreateParameter("task_id", task.Id.ToString()));
+            cmd.Parameters.Add(connector.CreateParameter("task_name", task.Name));
+            cmd.Parameters.Add(connector.CreateParameter("run_id", run.Id.ToString()));
+            cmd.Parameters.Add(connector.CreateParameter("status", run.Status.ToString()));
+            cmd.Parameters.Add(connector.CreateParameter("rows_read", run.RowsRead));
+            cmd.Parameters.Add(connector.CreateParameter("rows_written", run.RowsWritten));
+            cmd.Parameters.Add(connector.CreateParameter("started_at", run.StartedAt));
+            cmd.Parameters.Add(connector.CreateParameter("finished_at", run.FinishedAt ?? DateTime.UtcNow));
+            cmd.Parameters.Add(connector.CreateParameter("error_message", (object?)run.ErrorMessage ?? DBNull.Value));
+            cmd.Parameters.Add(connector.CreateParameter("trigger_type", run.TriggerType.ToString()));
+
+            await cmd.ExecuteNonQueryAsync(ct);
+            _log.LogInformation("Post-run SP {Sp} executed for task {TaskName} (run {RunId})",
+                spName, task.Name, run.Id);
+        }
+        catch (Exception ex)
+        {
+            // 不重新拋 — SP 失敗不應影響 ETL 已寫入的資料
+            _log.LogError(ex, "Post-run SP {Sp} failed for task {TaskName} (run {RunId})",
+                spName, task.Name, run.Id);
+            run.ErrorMessage = (run.ErrorMessage ?? "") + $"\n[Post-run SP failed: {ex.Message}]";
+            try { await _runSink.PersistAsync(run, CancellationToken.None); } catch { /* swallow */ }
+        }
+    }
 }
 
 public interface IRunHistorySink

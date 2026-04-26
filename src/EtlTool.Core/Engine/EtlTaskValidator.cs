@@ -66,6 +66,19 @@ public static class EtlTaskValidator
         if (task.RetryBackoffMultiplier < 1.0 || task.RetryBackoffMultiplier > 10.0)
             errors.Add("重試退避倍數需在 1.0 ~ 10.0 之間");
 
+        // Stored Procedure 名稱基本檢查（schema.name 或 name；長度上限 200）
+        foreach (var (label, sp) in new[]
+        {
+            ("成功後 SP", task.PostSuccessSp),
+            ("失敗後 SP", task.PostFailureSp),
+        })
+        {
+            if (string.IsNullOrWhiteSpace(sp)) continue;
+            if (sp.Length > 200) errors.Add($"{label} 名稱過長（>200 字）");
+            if (sp.Contains(';') || sp.Contains("--") || sp.Contains("/*"))
+                errors.Add($"{label} 名稱含非法字元（; 或註解符號）");
+        }
+
         try
         {
             _ = new Quartz.CronExpression(task.CronExpression);

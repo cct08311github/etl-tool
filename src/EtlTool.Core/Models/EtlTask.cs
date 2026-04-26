@@ -38,6 +38,15 @@ public class EtlTask
     /// <summary>每次重試延遲倍數（exponential backoff）。1.0 = 固定間隔；2.0 = 60s, 120s, 240s...</summary>
     public double RetryBackoffMultiplier { get; set; } = 2.0;
 
+    /// <summary>
+    /// 成功完成後在「目標 DB」呼叫的 stored procedure（schema-qualified，例如 dbo.OnEtlCompleted）。
+    /// 空字串 = 不呼叫。SP 參數見 EtlEngine.InvokePostRunSpAsync 註解。
+    /// </summary>
+    public string? PostSuccessSp { get; set; }
+
+    /// <summary>失敗時呼叫的 SP（同樣於目標 DB）。空 = 不呼叫。</summary>
+    public string? PostFailureSp { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
