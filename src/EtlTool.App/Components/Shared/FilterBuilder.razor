@@ -11,6 +11,7 @@
     [Parameter] public IReadOnlyList<EtlTool.Core.Models.ColumnInfo> SourceColumns { get; set; } = Array.Empty<EtlTool.Core.Models.ColumnInfo>();
 
     private EtlTool.Core.Models.FilterGroup _root = new();
+    private bool _showTokens;
 
     // 用 string 過渡值好讓 multi-value 條件能 binding 進 textarea
     private readonly Dictionary<EtlTool.Core.Models.FilterCondition, string> _multiValueText = new();
@@ -85,12 +86,107 @@
     }
 }
 
-<div class="mb-2">
+<div class="mb-2 d-flex justify-content-between align-items-center">
     <div class="btn-group" role="group">
         <button type="button" class="btn @(Mode == EtlTool.Core.Models.FilterMode.FormBuilder ? "btn-primary" : "btn-outline-primary")" @onclick="SwitchToForm">表單模式</button>
         <button type="button" class="btn @(Mode == EtlTool.Core.Models.FilterMode.RawSql ? "btn-primary" : "btn-outline-primary")" @onclick="SwitchToRaw">進階 SQL</button>
     </div>
+    <button type="button" class="btn btn-sm btn-link text-muted" @onclick="() => _showTokens = !_showTokens">
+        @(_showTokens ? "▴ 隱藏" : "▾") 日期變數
+    </button>
 </div>
+
+@if (_showTokens)
+{
+    <div class="card mb-2 token-cheatsheet">
+        <div class="card-body py-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong>動態日期變數 — 執行時自動替換為當下時刻</strong>
+                <small class="text-muted">表單模式不加引號 · 進階 SQL 也不加引號（系統會自動轉成 <code>TO_TIMESTAMP(...)</code> / <code>'YYYY-MM-DD …'</code>）</small>
+            </div>
+
+            <div class="row g-3">
+                <div class="col-md-6 col-lg-4">
+                    <div class="token-group-title">📅 今 / 昨 / 明（最常用）</div>
+                    <table class="token-table">
+                        <tr><td><code>${"${TODAY}"}</code></td><td>今天 00:00</td></tr>
+                        <tr><td><code>${"${TODAY_END}"}</code></td><td>今天 23:59:59.999</td></tr>
+                        <tr><td><code>${"${YESTERDAY}"}</code></td><td>昨天 00:00</td></tr>
+                        <tr><td><code>${"${YESTERDAY_END}"}</code></td><td>昨天 23:59:59.999</td></tr>
+                        <tr><td><code>${"${TOMORROW}"}</code></td><td>明天 00:00</td></tr>
+                        <tr><td><code>${"${NOW}"}</code></td><td>當下時刻（含時分秒）</td></tr>
+                    </table>
+                </div>
+
+                <div class="col-md-6 col-lg-4">
+                    <div class="token-group-title">⏰ 期間起訖（本/上）</div>
+                    <table class="token-table">
+                        <tr><td><code>${"${HOUR_START}"}</code></td><td>本小時 00 分</td></tr>
+                        <tr><td><code>${"${WEEK_START}"}</code></td><td>本週一 00:00</td></tr>
+                        <tr><td><code>${"${WEEK_END}"}</code></td><td>本週日 23:59:59.999</td></tr>
+                        <tr><td><code>${"${LAST_WEEK_START}"}</code></td><td>上週一</td></tr>
+                        <tr><td><code>${"${LAST_WEEK_END}"}</code></td><td>上週日</td></tr>
+                        <tr><td><code>${"${MONTH_START}"}</code></td><td>本月 1 日</td></tr>
+                        <tr><td><code>${"${MONTH_END}"}</code></td><td>本月最後一刻</td></tr>
+                        <tr><td><code>${"${LAST_MONTH_START}"}</code></td><td>上月 1 日</td></tr>
+                        <tr><td><code>${"${LAST_MONTH_END}"}</code></td><td>上月最後一刻</td></tr>
+                    </table>
+                </div>
+
+                <div class="col-md-6 col-lg-4">
+                    <div class="token-group-title">📊 季 / 年</div>
+                    <table class="token-table">
+                        <tr><td><code>${"${QUARTER_START}"}</code></td><td>本季首日</td></tr>
+                        <tr><td><code>${"${QUARTER_END}"}</code></td><td>本季最後一刻</td></tr>
+                        <tr><td><code>${"${LAST_QUARTER_START}"}</code></td><td>上季首日</td></tr>
+                        <tr><td><code>${"${LAST_QUARTER_END}"}</code></td><td>上季最後一刻</td></tr>
+                        <tr><td><code>${"${YEAR_START}"}</code></td><td>本年 1/1</td></tr>
+                        <tr><td><code>${"${YEAR_END}"}</code></td><td>本年 12/31 最後一刻</td></tr>
+                        <tr><td><code>${"${LAST_YEAR_START}"}</code></td><td>去年 1/1</td></tr>
+                        <tr><td><code>${"${LAST_YEAR_END}"}</code></td><td>去年最後一刻</td></tr>
+                    </table>
+                </div>
+
+                <div class="col-md-6 col-lg-4">
+                    <div class="token-group-title">⏪ 相對偏移（N 任填整數）</div>
+                    <table class="token-table">
+                        <tr><td><code>${"${MINUTES_AGO_15}"}</code></td><td>15 分鐘前</td></tr>
+                        <tr><td><code>${"${HOURS_AGO_3}"}</code></td><td>3 小時前</td></tr>
+                        <tr><td><code>${"${DAYS_AGO_7}"}</code></td><td>7 天前 00:00</td></tr>
+                        <tr><td><code>${"${WEEKS_AGO_2}"}</code></td><td>2 週前 00:00</td></tr>
+                        <tr><td><code>${"${MONTHS_AGO_3}"}</code></td><td>3 個月前 00:00</td></tr>
+                        <tr><td><code>${"${YEARS_AGO_1}"}</code></td><td>1 年前 00:00</td></tr>
+                    </table>
+                </div>
+
+                <div class="col-md-6 col-lg-4">
+                    <div class="token-group-title">🔤 格式化字串（VARCHAR 日期欄位用）</div>
+                    <table class="token-table">
+                        <tr><td><code>${"${TODAY:yyyyMMdd}"}</code></td><td>"20260426"</td></tr>
+                        <tr><td><code>${"${YESTERDAY:yyyy-MM-dd}"}</code></td><td>"2026-04-25"</td></tr>
+                        <tr><td><code>${"${MONTH_START:yyyyMM}"}</code></td><td>"202604"</td></tr>
+                        <tr><td><code>${"${NOW:yyyyMMddHHmmss}"}</code></td><td>"20260426143507"</td></tr>
+                    </table>
+                    <small class="text-muted">格式語法 = .NET DateTime 格式字串</small>
+                </div>
+
+                <div class="col-md-6 col-lg-4">
+                    <div class="token-group-title">💡 常見範本</div>
+                    <table class="token-table">
+                        <tr><td colspan="2"><strong>每天轉前一天資料</strong></td></tr>
+                        <tr><td colspan="2"><code>CreatedAt &gt;= ${"${YESTERDAY}"} AND CreatedAt &lt; ${"${TODAY}"}</code></td></tr>
+                        <tr><td colspan="2"><strong>每月轉上月整月</strong></td></tr>
+                        <tr><td colspan="2"><code>CreatedAt BETWEEN ${"${LAST_MONTH_START}"} AND ${"${LAST_MONTH_END}"}</code></td></tr>
+                        <tr><td colspan="2"><strong>近 24 小時增量</strong></td></tr>
+                        <tr><td colspan="2"><code>UpdatedAt &gt;= ${"${HOURS_AGO_24}"}</code></td></tr>
+                        <tr><td colspan="2"><strong>VARCHAR 日期欄</strong></td></tr>
+                        <tr><td colspan="2"><code>YYYYMMDD = ${"${YESTERDAY:yyyyMMdd}"}</code></td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @if (Mode == EtlTool.Core.Models.FilterMode.FormBuilder)
 {

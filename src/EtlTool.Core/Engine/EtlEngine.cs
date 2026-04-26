@@ -303,7 +303,9 @@ public sealed class EtlEngine
         }
         else if (task.FilterMode == FilterMode.RawSql && !string.IsNullOrWhiteSpace(task.FilterRawSql))
         {
-            sb.Append(" WHERE ").Append(task.FilterRawSql);
+            // Raw SQL 內的 ${TOKEN} 用 provider-specific date literal 替換
+            var substituted = DateTokenResolver.SubstituteRaw(task.FilterRawSql!, connector.Provider);
+            sb.Append(" WHERE ").Append(substituted);
         }
 
         return (sb.ToString(), ps);
@@ -331,12 +333,12 @@ public sealed class EtlEngine
             }
             else if (task.FilterMode == FilterMode.RawSql && !string.IsNullOrWhiteSpace(task.FilterRawSql))
             {
-                sb.Append(" WHERE ").Append(task.FilterRawSql);
+                sb.Append(" WHERE ").Append(DateTokenResolver.SubstituteRaw(task.FilterRawSql!, connector.Provider));
             }
         }
         else if (!string.IsNullOrWhiteSpace(task.DeleteWhereRawSql))
         {
-            sb.Append(" WHERE ").Append(task.DeleteWhereRawSql);
+            sb.Append(" WHERE ").Append(DateTokenResolver.SubstituteRaw(task.DeleteWhereRawSql!, connector.Provider));
         }
 
         var sql = sb.ToString();

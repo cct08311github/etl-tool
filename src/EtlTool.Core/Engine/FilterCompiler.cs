@@ -141,12 +141,21 @@ public sealed class FilterCompiler
     }
 
     /// <summary>
-    /// 嘗試把字串值轉成最合適的 .NET 型別（整數→long、浮點→decimal、ISO 日期→DateTime，否則保留字串）。
-    /// 由 ADO.NET driver 在最後一刻處理目標型別。
+    /// 嘗試把字串值轉成最合適的 .NET 型別：
+    ///   1) 日期變數 token（${TODAY}、${YESTERDAY}、${DAYS_AGO_7}…）→ DateTime
+    ///   2) 整數字串 → long
+    ///   3) 浮點字串 → decimal
+    ///   4) ISO 日期字串 → DateTime
+    ///   5) 其他 → 原字串（由 ADO.NET driver 處理型別）
     /// </summary>
     private static object? ParseValue(string? raw)
     {
         if (raw is null) return null;
+
+        // 日期變數優先檢查（${TODAY} → DateTime；${TODAY:yyyyMMdd} → 格式化字串）
+        var token = DateTokenResolver.TryResolve(raw);
+        if (token is not null) return token;
+
         if (long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i))
             return i;
         if (decimal.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
