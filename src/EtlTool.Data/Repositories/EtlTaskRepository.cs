@@ -66,6 +66,7 @@ public sealed class EtlTaskRepository : IEtlTaskLookup, IAllEtlTasksProvider
         existing.RetryBackoffMultiplier = task.RetryBackoffMultiplier;
         existing.PostSuccessSp = task.PostSuccessSp;
         existing.PostFailureSp = task.PostFailureSp;
+        existing.MaskSamplePayload = task.MaskSamplePayload;
         existing.UpdatedAt = DateTime.UtcNow;
 
         // 用 ExecuteDeleteAsync 直接下 SQL DELETE，繞過 change tracker

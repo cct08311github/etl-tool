@@ -47,6 +47,13 @@ public class EtlTask
     /// <summary>失敗時呼叫的 SP（同樣於目標 DB）。空 = 不呼叫。</summary>
     public string? PostFailureSp { get; set; }
 
+    /// <summary>
+    /// 是否在 RunHistory 的 sample payload 中遮罩敏感字串值（PII 保護）。
+    /// 開啟時：字串值 > 4 字元 → 保留前 1 字 + 後 1 字 + 中間以 * 替代 (e.g. "Alice" → "A***e")。
+    /// 數值 / 日期 / 短字串 / null 不遮罩。
+    /// </summary>
+    public bool MaskSamplePayload { get; set; } = false;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

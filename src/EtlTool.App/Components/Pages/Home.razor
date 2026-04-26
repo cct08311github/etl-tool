@@ -3,10 +3,62 @@
 @inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Core.Scheduling.SchedulerKillSwitch KillSwitch
+@inject AuthenticationStateProvider AuthState
 
 <PageTitle>Dashboard</PageTitle>
 
-<h1>Dashboard</h1>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">Dashboard</h1>
+    @if (KillSwitch.IsPaused)
+    {
+        <button class="btn btn-success" @onclick="ResumeAll">
+            <Icon Name="play" /> 恢復排程器
+        </button>
+    }
+    else
+    {
+        <button class="btn btn-outline-danger" @onclick="() => _showPauseModal = true">
+            <Icon Name="alert-triangle" /> 緊急暫停所有排程
+        </button>
+    }
+</div>
+
+@if (KillSwitch.IsPaused)
+{
+    <div class="alert alert-warning mb-3">
+        <strong>⏸ 排程器已暫停</strong>
+        — 由 <code>@KillSwitch.PausedBy</code> 於 @KillSwitch.PausedAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") 觸發
+        @if (!string.IsNullOrEmpty(KillSwitch.PauseReason)) { <span>，理由：@KillSwitch.PauseReason</span> }
+        。所有排程觸發的 ETL 都會 skip；手動觸發仍可執行。
+    </div>
+}
+
+@if (_showPauseModal)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">⛔ 緊急暫停所有排程</h5></div>
+                <div class="modal-body">
+                    <p>暫停後：</p>
+                    <ul>
+                        <li>所有 cron 觸發的 ETL 都會 skip 並寫入 audit</li>
+                        <li>已在執行中的不會被中斷</li>
+                        <li>手動「立即執行」仍可使用</li>
+                        <li>app 重啟後自動恢復</li>
+                    </ul>
+                    <label class="form-label">暫停理由（將寫入 audit log）</label>
+                    <input class="form-control" @bind="_pauseReason" placeholder="例：來源 DB 異常排查中" />
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showPauseModal = false">取消</button>
+                    <button class="btn btn-danger" @onclick="ConfirmPause">確認暫停</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @if (_loading)
 {
@@ -97,6 +149,8 @@ else
 
 @code {
     private bool _loading = true;
+    private bool _showPauseModal;
+    private string _pauseReason = "";
     private int _connectionsCount;
     private int _unhealthyConnections;
     private int _tasksCount;
@@ -125,5 +179,25 @@ else
         _recentRuns = runs.Take(15).ToList();
 
         _loading = false;
+    }
+
+    private async Task ConfirmPause()
+    {
+        var actor = await GetUsernameAsync();
+        await KillSwitch.PauseAsync(actor, string.IsNullOrWhiteSpace(_pauseReason) ? null : _pauseReason);
+        _showPauseModal = false;
+        _pauseReason = "";
+    }
+
+    private async Task ResumeAll()
+    {
+        var actor = await GetUsernameAsync();
+        await KillSwitch.ResumeAsync(actor);
+    }
+
+    private async Task<string> GetUsernameAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        return state.User.Identity?.Name ?? "unknown";
     }
 }

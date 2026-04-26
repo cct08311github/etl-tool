@@ -108,6 +108,12 @@ builder.Services.AddScoped<EtlEngine>();
 builder.Services.AddScoped<SchedulerService>();
 builder.Services.AddScoped<EtlJob>();
 
+// Banking control plane: kill switch + maintenance windows + failure webhook
+builder.Services.AddSingleton<SchedulerKillSwitch>();
+builder.Services.Configure<MaintenanceWindowsOptions>(builder.Configuration.GetSection("Maintenance"));
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IFailureNotifier, HttpFailureNotifier>();
+
 // Quartz
 builder.Services.AddQuartz(q => { q.SchedulerName = "EtlTool"; });
 builder.Services.AddQuartzHostedService(opt => { opt.WaitForJobsToComplete = true; });

@@ -1,6 +1,7 @@
 using EtlTool.Core.Engine;
 using EtlTool.Core.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Quartz;
 
 namespace EtlTool.Core.Scheduling;
@@ -14,12 +15,22 @@ public sealed class EtlJob : IJob
     private readonly EtlEngine _engine;
     private readonly IEtlTaskLookup _taskLookup;
     private readonly ILogger<EtlJob> _log;
+    private readonly SchedulerKillSwitch? _killSwitch;
+    private readonly IOptionsMonitor<MaintenanceWindowsOptions>? _maintenance;
+    private readonly IAuditLogger? _audit;
 
-    public EtlJob(EtlEngine engine, IEtlTaskLookup taskLookup, ILogger<EtlJob> log)
+    public EtlJob(
+        EtlEngine engine, IEtlTaskLookup taskLookup, ILogger<EtlJob> log,
+        SchedulerKillSwitch? killSwitch = null,
+        IOptionsMonitor<MaintenanceWindowsOptions>? maintenance = null,
+        IAuditLogger? audit = null)
     {
         _engine = engine;
         _taskLookup = taskLookup;
         _log = log;
+        _killSwitch = killSwitch;
+        _maintenance = maintenance;
+        _audit = audit;
     }
 
     public async Task Execute(IJobExecutionContext context)
@@ -45,6 +56,36 @@ public sealed class EtlJob : IJob
         {
             _log.LogDebug("Skipping disabled task {TaskId}", taskId);
             return;
+        }
+
+        // 銀行控制 1：全域 kill switch（手動觸發例外允許）
+        if (_killSwitch is { IsPaused: true } && triggerType == TriggerType.Scheduled)
+        {
+            _log.LogInformation("Skipping {TaskName} — scheduler globally paused by {Actor} (reason: {Reason})",
+                task.Name, _killSwitch.PausedBy, _killSwitch.PauseReason);
+            if (_audit is not null)
+                await _audit.LogAsync(AuditCategory.Run, AuditAction.RunStarted,
+                    $"⏸ 跳過任務「{task.Name}」— 排程器全域暫停中（{_killSwitch.PauseReason ?? "未提供理由"}）",
+                    targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                    severity: AuditSeverity.Warning, ct: context.CancellationToken);
+            return;
+        }
+
+        // 銀行控制 2：維護視窗（手動觸發例外允許）
+        if (_maintenance is not null && triggerType == TriggerType.Scheduled)
+        {
+            var active = _maintenance.CurrentValue.CurrentlyActive(DateTime.Now);
+            if (active is not null)
+            {
+                _log.LogInformation("Skipping {TaskName} — within maintenance window: {Reason}",
+                    task.Name, active.Reason);
+                if (_audit is not null)
+                    await _audit.LogAsync(AuditCategory.Run, AuditAction.RunStarted,
+                        $"⏸ 跳過任務「{task.Name}」— 維護視窗中（{active.Reason ?? $"{active.From}-{active.To}"}）",
+                        targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                        severity: AuditSeverity.Info, ct: context.CancellationToken);
+                return;
+            }
         }
 
         await ExecuteWithRetryAsync(task, triggerType, context.CancellationToken);

@@ -16,19 +16,22 @@ public sealed class EtlEngine
     private readonly IRunHistorySink _runSink;
     private readonly IConnectionLookup _connectionLookup;
     private readonly IAuditLogger? _audit;
+    private readonly IFailureNotifier? _failureNotifier;
 
     public EtlEngine(
         ILogger<EtlEngine> log,
         IDbConnectorFactory factory,
         IRunHistorySink runSink,
         IConnectionLookup connectionLookup,
-        IAuditLogger? audit = null)
+        IAuditLogger? audit = null,
+        IFailureNotifier? failureNotifier = null)
     {
         _log = log;
         _factory = factory;
         _runSink = runSink;
         _connectionLookup = connectionLookup;
         _audit = audit;
+        _failureNotifier = failureNotifier;
     }
 
     /// <summary>
@@ -145,7 +148,7 @@ public sealed class EtlEngine
                     {
                         var sample = new Dictionary<string, object?>(targetCols.Count);
                         for (int i = 0; i < targetCols.Count; i++)
-                            sample[targetCols[i]] = row[i];
+                            sample[targetCols[i]] = task.MaskSamplePayload ? MaskValue(row[i]) : row[i];
                         samplePayload.Add(sample);
                     }
 
@@ -218,6 +221,13 @@ public sealed class EtlEngine
                     severity: AuditSeverity.Error,
                     detailsJson: System.Text.Json.JsonSerializer.Serialize(new { runId = run.Id, error = ex.GetType().Name }),
                     ct: CancellationToken.None);
+
+            // Failure webhook（fire-and-forget；webhook 自身錯誤已在 notifier 內 swallow）
+            if (_failureNotifier is not null)
+            {
+                _ = Task.Run(() => _failureNotifier.NotifyFailureAsync(task, run, CancellationToken.None));
+            }
+
             return run;
         }
     }
@@ -357,6 +367,28 @@ public sealed class EtlEngine
 
     private static string AppendSql(string? existing, string add)
         => string.IsNullOrEmpty(existing) ? add : existing + "\n\n" + add;
+
+    /// <summary>
+    /// PII 遮罩規則：
+    ///   - null / 數值 / 布林 / 日期 / byte[] → 不遮罩（型別本身少 PII；遮罩會破壞 schema 直觀性）
+    ///   - 字串 ≤ 4 字 → 不遮罩（縮寫、狀態碼、貨幣代號等通常不敏感）
+    ///   - 字串 > 4 字 → 保留首尾各 1 字，中間用 * 填滿至原長度
+    /// 例：
+    ///   "Alice"      → "A***e"
+    ///   "Anderson"   → "A******n"
+    ///   "0912345678" → "0********8"
+    ///   "tw"         → "tw"
+    /// </summary>
+    public static object? MaskValue(object? value)
+    {
+        if (value is null) return null;
+        if (value is string s)
+        {
+            if (s.Length <= 4) return s;
+            return string.Concat(s[0], new string('*', s.Length - 2), s[^1]);
+        }
+        return value;
+    }
 
     /// <summary>
     /// 呼叫使用者設定的 stored procedure（在目標 DB 上）。
