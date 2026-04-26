@@ -171,14 +171,33 @@
                 </div>
 
                 <div class="col-md-6 col-lg-4">
+                    <div class="token-group-title">📈 同期比較 (YoY / MoM / WoW / DoD)</div>
+                    <table class="token-table">
+                        <tr><td><code>${"${YOY}"}</code></td><td>1 年前同一刻（year-over-year）</td></tr>
+                        <tr><td><code>${"${MOM}"}</code></td><td>1 個月前同一刻</td></tr>
+                        <tr><td><code>${"${WOW}"}</code></td><td>1 週前同一刻</td></tr>
+                        <tr><td><code>${"${DOD}"}</code></td><td>1 天前同一刻</td></tr>
+                        <tr><td colspan="2"><span class="text-muted small">＝ Period-to-Date 起始點別名 ＝</span></td></tr>
+                        <tr><td><code>${"${YTD}"}</code></td><td>本年首日（= YEAR_START）</td></tr>
+                        <tr><td><code>${"${MTD}"}</code></td><td>本月首日（= MONTH_START）</td></tr>
+                        <tr><td><code>${"${WTD}"}</code></td><td>本週一（= WEEK_START）</td></tr>
+                        <tr><td><code>${"${DTD}"}</code></td><td>今天 00:00（= TODAY）</td></tr>
+                    </table>
+                </div>
+
+                <div class="col-md-6 col-lg-4">
                     <div class="token-group-title">💡 常見範本</div>
                     <table class="token-table">
                         <tr><td colspan="2"><strong>每天轉前一天資料</strong></td></tr>
                         <tr><td colspan="2"><code>CreatedAt &gt;= ${"${YESTERDAY}"} AND CreatedAt &lt; ${"${TODAY}"}</code></td></tr>
                         <tr><td colspan="2"><strong>每月轉上月整月</strong></td></tr>
                         <tr><td colspan="2"><code>CreatedAt BETWEEN ${"${LAST_MONTH_START}"} AND ${"${LAST_MONTH_END}"}</code></td></tr>
-                        <tr><td colspan="2"><strong>近 24 小時增量</strong></td></tr>
-                        <tr><td colspan="2"><code>UpdatedAt &gt;= ${"${HOURS_AGO_24}"}</code></td></tr>
+                        <tr><td colspan="2"><strong>YTD（本年至今）</strong></td></tr>
+                        <tr><td colspan="2"><code>CreatedAt BETWEEN ${"${YTD}"} AND ${"${NOW}"}</code></td></tr>
+                        <tr><td colspan="2"><strong>YoY 同期比較（同 YTD 範圍但去年）</strong></td></tr>
+                        <tr><td colspan="2"><code>CreatedAt BETWEEN ${"${LAST_YEAR_START}"} AND ${"${YOY}"}</code></td></tr>
+                        <tr><td colspan="2"><strong>MoM（與一個月前同一時刻比較）</strong></td></tr>
+                        <tr><td colspan="2"><code>CreatedAt &gt;= ${"${MOM}"}</code></td></tr>
                         <tr><td colspan="2"><strong>VARCHAR 日期欄</strong></td></tr>
                         <tr><td colspan="2"><code>YYYYMMDD = ${"${YESTERDAY:yyyyMMdd}"}</code></td></tr>
                     </table>

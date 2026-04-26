@@ -79,9 +79,11 @@ public sealed class EtlEngine
 
                 // 2) 編譯讀取 SQL
                 var (readSql, readParams) = BuildReadSql(sourceConnector, task, evaluator);
-                run.GeneratedReadSql = readSql + (readParams.Count > 0
-                    ? "\n-- params: " + string.Join(", ", readParams.Select(p => $"{p.Name}={p.Value}"))
-                    : "");
+                // 落地兩個版本：parameterized 原型 + 實際代入值版本（給人複製到 SSMS / SQL Developer 重跑）
+                var readRendered = SqlRenderer.Render(readSql, readParams, sourceConnector.Provider, sourceConnector.ParameterPrefix);
+                run.GeneratedReadSql = readParams.Count > 0
+                    ? $"-- 已展開參數的可執行版本：\n{readRendered}\n\n-- 原始參數化版本：\n{readSql}"
+                    : readSql;
 
                 // 3) ExecuteReader streaming
                 await using var readCmd = srcConn.CreateCommand();
@@ -347,7 +349,10 @@ public sealed class EtlEngine
         cmd.CommandText = sql;
         foreach (var p in ps) cmd.Parameters.Add(connector.CreateParameter(p.Item1, p.Item2));
         var affected = await cmd.ExecuteNonQueryAsync(ct);
-        return $"-- Delete affected {affected}\n{sql}";
+        var rendered = SqlRenderer.Render(sql, ps, connector.Provider, connector.ParameterPrefix);
+        return ps.Count > 0
+            ? $"-- Delete affected {affected}\n-- 已展開參數的可執行版本：\n{rendered}\n\n-- 原始參數化版本：\n{sql}"
+            : $"-- Delete affected {affected}\n{sql}";
     }
 
     private static string AppendSql(string? existing, string add)

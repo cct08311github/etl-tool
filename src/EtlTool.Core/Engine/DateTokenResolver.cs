@@ -152,6 +152,18 @@ public static class DateTokenResolver
             "LAST_YEAR_START"   => new(now.Year - 1, 1, 1),
             "LAST_YEAR_END"     => endOf(new DateTime(now.Year, 1, 1)),
 
+            // 同期比較：「同樣時刻 N 個週期前」(point-in-time)，用於 YoY / MoM 比對基準
+            "YOY"   => now.AddYears(-1),
+            "MOM"   => now.AddMonths(-1),
+            "WOW"   => now.AddDays(-7),
+            "DOD"   => now.AddDays(-1),
+
+            // Period-to-date：起始點別名（範圍寫法：[YTD, NOW] / [MTD, NOW] 等）
+            "YTD"   => new(now.Year, 1, 1),                   // = YEAR_START
+            "MTD"   => new(now.Year, now.Month, 1),           // = MONTH_START
+            "WTD"   => weekStart(today),                      // = WEEK_START
+            "DTD"   => today,                                 // = TODAY
+
             _ => TryParseRelative(token, now),
         };
     }
