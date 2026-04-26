@@ -198,11 +198,13 @@
                         <tr><td colspan="2"><code>CreatedAt &gt;= ${"${YESTERDAY}"} AND CreatedAt &lt; ${"${TODAY}"}</code></td></tr>
                         <tr><td colspan="2"><strong>每月轉上月整月</strong></td></tr>
                         <tr><td colspan="2"><code>CreatedAt BETWEEN ${"${LAST_MONTH_START}"} AND ${"${LAST_MONTH_END}"}</code></td></tr>
-                        <tr><td colspan="2"><strong>YTD（本年至今）</strong></td></tr>
+                        <tr><td colspan="2"><strong>本年 YTD（今年 1/1 至今）</strong></td></tr>
                         <tr><td colspan="2"><code>CreatedAt BETWEEN ${"${YTD}"} AND ${"${NOW}"}</code></td></tr>
-                        <tr><td colspan="2"><strong>YoY 同期比較（同 YTD 範圍但去年）</strong></td></tr>
+                        <tr><td colspan="2"><strong>去年同期 YTD（搭配上一條跑兩個任務做 YoY 比較）</strong></td></tr>
                         <tr><td colspan="2"><code>CreatedAt BETWEEN ${"${LAST_YEAR_START}"} AND ${"${YOY}"}</code></td></tr>
-                        <tr><td colspan="2"><strong>MoM（與一個月前同一時刻比較）</strong></td></tr>
+                        <tr><td colspan="2"><strong>本年+去年同期合併撈（單一任務做 YoY 比對）</strong></td></tr>
+                        <tr><td colspan="2"><code>(CreatedAt BETWEEN ${"${YTD}"} AND ${"${NOW}"}) OR (CreatedAt BETWEEN ${"${LAST_YEAR_START}"} AND ${"${YOY}"})</code></td></tr>
+                        <tr><td colspan="2"><strong>近一個月增量（MoM 取數）</strong></td></tr>
                         <tr><td colspan="2"><code>CreatedAt &gt;= ${"${MOM}"}</code></td></tr>
                         <tr><td colspan="2"><strong>VARCHAR 日期欄</strong></td></tr>
                         <tr><td colspan="2"><code>YYYYMMDD = ${"${YESTERDAY:yyyyMMdd}"}</code></td></tr>

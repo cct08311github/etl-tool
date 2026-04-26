@@ -168,4 +168,31 @@ public class DateTokenResolverTests
         var got = DateTokenResolver.SubstituteRaw(sql, DbProviderType.Oracle, Ref);
         Assert.Contains("${UNKNOWN_TOKEN}", got);
     }
+
+    // Task D: 5 representative tokens × 2 DB providers
+    // Verifies end-to-end token resolution + FormatLiteral branching per provider.
+    // Ref = 2026-04-26 14:35:07 (Q2, Sunday)
+    [Theory]
+    // SqlServer: all tokens produce single-quoted string literals
+    [InlineData(DbProviderType.SqlServer, "${TODAY}",           "'2026-04-26 00:00:00.000'")]
+    [InlineData(DbProviderType.SqlServer, "${YOY}",             "'2025-04-26 14:35:07.000'")]
+    [InlineData(DbProviderType.SqlServer, "${LAST_QUARTER_END}","'2026-03-31 23:59:59.999'")]
+    [InlineData(DbProviderType.SqlServer, "${MONTHS_AGO_3}",    "'2026-01-26 00:00:00.000'")]
+    [InlineData(DbProviderType.SqlServer, "${MTD}",             "'2026-04-01 00:00:00.000'")]
+    // Oracle: all tokens produce TO_TIMESTAMP(...)
+    [InlineData(DbProviderType.Oracle,    "${TODAY}",           "TO_TIMESTAMP('2026-04-26 00:00:00.000'")]
+    [InlineData(DbProviderType.Oracle,    "${YOY}",             "TO_TIMESTAMP('2025-04-26 14:35:07.000'")]
+    [InlineData(DbProviderType.Oracle,    "${LAST_QUARTER_END}","TO_TIMESTAMP('2026-03-31 23:59:59.999'")]
+    [InlineData(DbProviderType.Oracle,    "${MONTHS_AGO_3}",    "TO_TIMESTAMP('2026-01-26 00:00:00.000'")]
+    [InlineData(DbProviderType.Oracle,    "${MTD}",             "TO_TIMESTAMP('2026-04-01 00:00:00.000'")]
+    public void RepresentativeTokens_BothProviders_ExpandCorrectly(
+        DbProviderType provider, string token, string expectedFragment)
+    {
+        var sql = $"col = {token}";
+        var got = DateTokenResolver.SubstituteRaw(sql, provider, Ref);
+
+        // The token must be gone and the expected literal fragment must appear
+        Assert.DoesNotContain("${", got);
+        Assert.Contains(expectedFragment, got);
+    }
 }
