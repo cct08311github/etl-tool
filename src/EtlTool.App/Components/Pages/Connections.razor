@@ -1,14 +1,25 @@
 @page "/connections"
 @rendermode InteractiveServer
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Data.Repositories.ApprovalRepository ApprovalRepo
+@inject AuthenticationStateProvider AuthState
 @inject NavigationManager Nav
 
 <PageTitle>連線管理</PageTitle>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">連線管理</h1>
-    <a class="btn btn-primary" href="connections/new"><Icon Name="plus" />新增連線</a>
+    <AuthorizeView Roles="Admin,Operator">
+        <Authorized>
+            <a class="btn btn-primary" href="connections/new"><Icon Name="plus" />新增連線</a>
+        </Authorized>
+    </AuthorizeView>
 </div>
+
+@if (_message is not null)
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-info")">@_message</div>
+}
 
 @if (_items is null)
 {
@@ -19,7 +30,11 @@ else if (_items.Count == 0)
     <div class="empty-state">
         <h3>尚無連線</h3>
         <p>先建立 Oracle 或 SQL Server 連線，再回頭建任務。</p>
-        <a class="btn btn-primary mt-2" href="connections/new"><Icon Name="plus" />新增連線</a>
+        <AuthorizeView Roles="Admin,Operator">
+            <Authorized>
+                <a class="btn btn-primary mt-2" href="connections/new"><Icon Name="plus" />新增連線</a>
+            </Authorized>
+        </AuthorizeView>
     </div>
 }
 else
@@ -43,6 +58,10 @@ else
                     <a href="@($"connections/{c.Id}")" class="fw-medium">
                         <Icon Name="database" Class="text-subtle me-2" />@c.Name
                     </a>
+                    @if (_pendingTargets.Contains(c.Id))
+                    {
+                        <span class="badge bg-warning text-dark ms-2" title="此連線已有待覆核的刪除請求">待覆核刪除</span>
+                    }
                 </td>
                 <td>
                     <span class="badge bg-primary">@c.ProviderType</span>
@@ -65,12 +84,18 @@ else
                 </td>
                 <td class="small text-muted">@c.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
                 <td class="text-end">
-                    <div class="row-actions">
-                        <a class="icon-btn" title="編輯" href="@($"connections/{c.Id}")"><Icon Name="edit" /></a>
-                        <button class="icon-btn icon-btn-danger" title="刪除" @onclick="() => Delete(c.Id)">
-                            <Icon Name="trash" />
-                        </button>
-                    </div>
+                    <AuthorizeView Roles="Admin,Operator" Context="ctx">
+                        <Authorized>
+                            <div class="row-actions">
+                                <a class="icon-btn" title="編輯" href="@($"connections/{c.Id}")"><Icon Name="edit" /></a>
+                                <button class="icon-btn icon-btn-danger" title="送交覆核刪除"
+                                        @onclick="() => OpenSubmit(c)"
+                                        disabled="@_pendingTargets.Contains(c.Id)">
+                                    <Icon Name="trash" />
+                                </button>
+                            </div>
+                        </Authorized>
+                    </AuthorizeView>
                 </td>
             </tr>
         }
@@ -79,19 +104,91 @@ else
     </div>
 }
 
+@if (_showSubmit && _submitTarget is not null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">送交覆核：刪除連線</h5></div>
+                <div class="modal-body">
+                    <p>
+                        將提交「<strong>@_submitTarget.Name</strong>」刪除請求，需另一位 Admin 在 <strong>/approvals</strong> 核准後才會真正刪除。<br />
+                        <span class="text-muted small">⛔ 你不能核准自己提交的請求。</span>
+                    </p>
+                    <label class="form-label">原因（建議填寫，會記入稽核）</label>
+                    <textarea class="form-control" rows="3" @bind="_reason" placeholder="例：已停用且 90 天未使用"></textarea>
+                    @if (_modalError is not null) { <div class="alert alert-danger mt-2">@_modalError</div> }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showSubmit = false">取消</button>
+                    <button class="btn btn-warning" @onclick="ConfirmSubmit">提交覆核</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private List<EtlTool.Core.Models.ConnectionDefinition>? _items;
+    private HashSet<Guid> _pendingTargets = new();
+    private string? _currentUsername;
+    private string? _message;
+    private bool _isError;
+
+    private bool _showSubmit;
+    private EtlTool.Core.Models.ConnectionDefinition? _submitTarget;
+    private string _reason = "";
+    private string? _modalError;
 
     protected override async Task OnInitializedAsync()
     {
-        _items = await ConnRepo.ListAsync(CancellationToken.None);
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _currentUsername = state.User.Identity?.Name;
+        await Reload();
     }
 
-    private async Task Delete(Guid id)
+    private async Task Reload()
     {
-        await ConnRepo.DeleteAsync(id, CancellationToken.None);
         _items = await ConnRepo.ListAsync(CancellationToken.None);
+        var pending = await ApprovalRepo.ListPendingAsync(CancellationToken.None);
+        _pendingTargets = pending
+            .Where(p => p.Action == ApprovalAction.DeleteConnection)
+            .Select(p => p.TargetId)
+            .ToHashSet();
         StateHasChanged();
+    }
+
+    private void OpenSubmit(EtlTool.Core.Models.ConnectionDefinition c)
+    {
+        _submitTarget = c;
+        _reason = "";
+        _modalError = null;
+        _showSubmit = true;
+    }
+
+    private async Task ConfirmSubmit()
+    {
+        if (_submitTarget is null || _currentUsername is null) return;
+        _modalError = null;
+        try
+        {
+            await ApprovalRepo.SubmitAsync(
+                ApprovalAction.DeleteConnection,
+                targetType: nameof(EtlTool.Core.Models.ConnectionDefinition),
+                targetId: _submitTarget.Id,
+                targetName: _submitTarget.Name,
+                submittedBy: _currentUsername,
+                reason: string.IsNullOrWhiteSpace(_reason) ? null : _reason,
+                ct: CancellationToken.None);
+            _showSubmit = false;
+            _isError = false;
+            _message = $"已提交「{_submitTarget.Name}」刪除請求，請通知另一位 Admin 至 /approvals 核准。";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _modalError = ex.Message;
+        }
     }
 
     private static string FormatRelative(DateTime utc)

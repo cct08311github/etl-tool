@@ -1,6 +1,7 @@
 @page "/connections/new"
 @page "/connections/{Id:guid}"
 @rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin,Operator")]
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
 @inject EtlTool.Core.Connectors.IConnectionStringProtector Protector
 @inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory

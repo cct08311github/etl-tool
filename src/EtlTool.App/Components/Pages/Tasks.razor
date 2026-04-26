@@ -1,20 +1,26 @@
 @page "/tasks"
 @rendermode InteractiveServer
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.Repositories.ApprovalRepository ApprovalRepo
 @inject EtlTool.Core.Scheduling.SchedulerService Scheduler
+@inject AuthenticationStateProvider AuthState
 
 <PageTitle>ETL 任務</PageTitle>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">ETL 任務</h1>
-    <a class="btn btn-primary" href="tasks/new">
-        <Icon Name="plus" />新增任務
-    </a>
+    <AuthorizeView Roles="Admin,Operator">
+        <Authorized>
+            <a class="btn btn-primary" href="tasks/new">
+                <Icon Name="plus" />新增任務
+            </a>
+        </Authorized>
+    </AuthorizeView>
 </div>
 
 @if (_message is not null)
 {
-    <div class="alert alert-info">@_message</div>
+    <div class="alert @(_isError ? "alert-danger" : "alert-info")">@_message</div>
 }
 
 @if (_items is null)
@@ -26,7 +32,11 @@ else if (_items.Count == 0)
     <div class="empty-state">
         <h3>尚無任務</h3>
         <p>建立第一個 ETL 任務，把資料從來源 A 表搬到目標 B 表。</p>
-        <a class="btn btn-primary mt-2" href="tasks/new"><Icon Name="plus" />新增任務</a>
+        <AuthorizeView Roles="Admin,Operator">
+            <Authorized>
+                <a class="btn btn-primary mt-2" href="tasks/new"><Icon Name="plus" />新增任務</a>
+            </Authorized>
+        </AuthorizeView>
     </div>
 }
 else
@@ -48,7 +58,13 @@ else
         @foreach (var t in _items)
         {
             <tr>
-                <td><a href="@($"tasks/{t.Id}")" class="fw-medium">@t.Name</a></td>
+                <td>
+                    <a href="@($"tasks/{t.Id}")" class="fw-medium">@t.Name</a>
+                    @if (_pendingTargets.Contains(t.Id))
+                    {
+                        <span class="badge bg-warning text-dark ms-2" title="此任務已有待覆核的刪除請求">待覆核刪除</span>
+                    }
+                </td>
                 <td>
                     <code class="text-muted">@t.SourceSchema.@t.SourceTable</code>
                     <Icon Name="arrow-right" Class="text-subtle mx-1" />
@@ -64,24 +80,40 @@ else
                         : "—")
                 </td>
                 <td>
-                    <div class="form-check form-switch m-0">
-                        <input type="checkbox" class="form-check-input" checked="@t.Enabled"
-                               @onchange="e => ToggleEnabled(t, (bool)e.Value!)" />
-                    </div>
+                    <AuthorizeView Roles="Admin,Operator" Context="ctx">
+                        <Authorized>
+                            <div class="form-check form-switch m-0">
+                                <input type="checkbox" class="form-check-input" checked="@t.Enabled"
+                                       @onchange="e => ToggleEnabled(t, (bool)e.Value!)" />
+                            </div>
+                        </Authorized>
+                        <NotAuthorized>
+                            <span class="badge @(t.Enabled ? "bg-success" : "bg-secondary")">@(t.Enabled ? "啟用" : "停用")</span>
+                        </NotAuthorized>
+                    </AuthorizeView>
                 </td>
                 <td class="text-end">
                     <div class="row-actions">
-                        <button class="icon-btn icon-btn-success" title="立即執行"
-                                @onclick="() => RunNow(t.Id)" disabled="@(_running == t.Id)">
-                            @if (_running == t.Id) { <Icon Name="loader" /> }
-                            else { <Icon Name="play" /> }
-                        </button>
+                        <AuthorizeView Roles="Admin,Operator" Context="ctx">
+                            <Authorized>
+                                <button class="icon-btn icon-btn-success" title="立即執行"
+                                        @onclick="() => RunNow(t.Id)" disabled="@(_running == t.Id)">
+                                    @if (_running == t.Id) { <Icon Name="loader" /> }
+                                    else { <Icon Name="play" /> }
+                                </button>
+                            </Authorized>
+                        </AuthorizeView>
                         <a class="icon-btn" title="執行歷史" href="@($"tasks/{t.Id}/runs")"><Icon Name="history" /></a>
-                        <a class="icon-btn" title="編輯" href="@($"tasks/{t.Id}")"><Icon Name="edit" /></a>
-                        <button class="icon-btn icon-btn-danger" title="刪除"
-                                @onclick="() => Delete(t.Id)">
-                            <Icon Name="trash" />
-                        </button>
+                        <AuthorizeView Roles="Admin,Operator" Context="ctx">
+                            <Authorized>
+                                <a class="icon-btn" title="編輯" href="@($"tasks/{t.Id}")"><Icon Name="edit" /></a>
+                                <button class="icon-btn icon-btn-danger" title="送交覆核刪除"
+                                        @onclick="() => OpenSubmit(t)"
+                                        disabled="@_pendingTargets.Contains(t.Id)">
+                                    <Icon Name="trash" />
+                                </button>
+                            </Authorized>
+                        </AuthorizeView>
                     </div>
                 </td>
             </tr>
@@ -91,13 +123,50 @@ else
     </div>
 }
 
+@if (_showSubmit && _submitTarget is not null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">送交覆核：刪除任務</h5></div>
+                <div class="modal-body">
+                    <p>
+                        將提交「<strong>@_submitTarget.Name</strong>」刪除請求，需另一位 Admin 在 <strong>/approvals</strong> 核准後才會真正刪除。<br />
+                        <span class="text-muted small">⛔ 你不能核准自己提交的請求；過期 7 天自動失效。</span>
+                    </p>
+                    <label class="form-label">原因（建議填寫，會記入稽核）</label>
+                    <textarea class="form-control" rows="3" @bind="_reason" placeholder="例：已被 newTask 取代"></textarea>
+                    @if (_modalError is not null) { <div class="alert alert-danger mt-2">@_modalError</div> }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showSubmit = false">取消</button>
+                    <button class="btn btn-warning" @onclick="ConfirmSubmit">提交覆核</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private List<EtlTool.Core.Models.EtlTask>? _items;
     private Dictionary<Guid, DateTimeOffset?> _nextFire = new();
+    private HashSet<Guid> _pendingTargets = new();
     private Guid? _running;
+    private string? _currentUsername;
     private string? _message;
+    private bool _isError;
 
-    protected override async Task OnInitializedAsync() => await Reload();
+    private bool _showSubmit;
+    private EtlTool.Core.Models.EtlTask? _submitTarget;
+    private string _reason = "";
+    private string? _modalError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _currentUsername = state.User.Identity?.Name;
+        await Reload();
+    }
 
     private async Task Reload()
     {
@@ -109,6 +178,11 @@ else
             try { _nextFire[t.Id] = await Scheduler.GetNextFireTimeAsync(t.Id, ct); }
             catch { _nextFire[t.Id] = null; }
         }
+        var pending = await ApprovalRepo.ListPendingAsync(ct);
+        _pendingTargets = pending
+            .Where(p => p.Action == ApprovalAction.DeleteTask)
+            .Select(p => p.TargetId)
+            .ToHashSet();
     }
 
     private async Task ToggleEnabled(EtlTool.Core.Models.EtlTask task, bool enabled)
@@ -129,10 +203,12 @@ else
         try
         {
             await Scheduler.TriggerNowAsync(id, CancellationToken.None);
+            _isError = false;
             _message = "已觸發手動執行，請至「歷史」查看結果。";
         }
         catch (Exception ex)
         {
+            _isError = true;
             _message = $"觸發失敗：{ex.Message}";
         }
         finally
@@ -141,10 +217,36 @@ else
         }
     }
 
-    private async Task Delete(Guid id)
+    private void OpenSubmit(EtlTool.Core.Models.EtlTask t)
     {
-        await Scheduler.UnscheduleAsync(id, CancellationToken.None);
-        await TaskRepo.DeleteAsync(id, CancellationToken.None);
-        await Reload();
+        _submitTarget = t;
+        _reason = "";
+        _modalError = null;
+        _showSubmit = true;
+    }
+
+    private async Task ConfirmSubmit()
+    {
+        if (_submitTarget is null || _currentUsername is null) return;
+        _modalError = null;
+        try
+        {
+            await ApprovalRepo.SubmitAsync(
+                ApprovalAction.DeleteTask,
+                targetType: nameof(EtlTool.Core.Models.EtlTask),
+                targetId: _submitTarget.Id,
+                targetName: _submitTarget.Name,
+                submittedBy: _currentUsername,
+                reason: string.IsNullOrWhiteSpace(_reason) ? null : _reason,
+                ct: CancellationToken.None);
+            _showSubmit = false;
+            _isError = false;
+            _message = $"已提交「{_submitTarget.Name}」刪除請求，請通知另一位 Admin 至 /approvals 核准。";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _modalError = ex.Message;
+        }
     }
 }

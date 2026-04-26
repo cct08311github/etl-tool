@@ -1,3 +1,7 @@
+@implements IDisposable
+@inject EtlTool.Data.Repositories.ApprovalRepository ApprovalRepo
+@inject AuthenticationStateProvider AuthState
+
 <div class="brand">
     <div class="brand-mark">
         <Icon Name="zap" />
@@ -23,6 +27,13 @@
     </NavLink>
     <AuthorizeView Roles="Admin">
         <Authorized>
+            <NavLink class="nav-item" href="approvals">
+                <Icon Name="check" /><span>覆核佇列</span>
+                @if (_pendingCount > 0)
+                {
+                    <span class="badge bg-warning text-dark ms-auto">@_pendingCount</span>
+                }
+            </NavLink>
             <NavLink class="nav-item" href="users">
                 <Icon Name="settings" /><span>使用者管理</span>
             </NavLink>
@@ -49,3 +60,47 @@
         <Icon Name="activity" /><span>Health</span>
     </a>
 </div>
+
+@code {
+    private int _pendingCount;
+    private System.Threading.Timer? _timer;
+    private bool _isAdmin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _isAdmin = state.User.IsInRole("Admin");
+
+        if (_isAdmin)
+        {
+            await RefreshCountAsync();
+            // 每 30s 輕量輪詢一次（僅 admin）
+            _timer = new System.Threading.Timer(async _ =>
+            {
+                try
+                {
+                    await RefreshCountAsync();
+                    await InvokeAsync(StateHasChanged);
+                }
+                catch { /* timer-thread 安靜失敗，下次再試 */ }
+            }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+        }
+    }
+
+    private async Task RefreshCountAsync()
+    {
+        try
+        {
+            _pendingCount = await ApprovalRepo.CountPendingAsync(CancellationToken.None);
+        }
+        catch
+        {
+            _pendingCount = 0;
+        }
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+}

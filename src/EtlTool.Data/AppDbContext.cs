@@ -13,6 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<RunHistory> RunHistories => Set<RunHistory>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<User> Users => Set<User>();
+    public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -88,6 +89,22 @@ public class AppDbContext : DbContext
             e.Property(x => x.Username).HasMaxLength(100).IsRequired();
             e.Property(x => x.PasswordHash).HasMaxLength(200).IsRequired();
             e.Property(x => x.Role).HasConversion<int>();
+        });
+
+        b.Entity<ApprovalRequest>(e =>
+        {
+            e.ToTable("ApprovalRequests");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Action).HasConversion<int>();
+            e.Property(x => x.Status).HasConversion<int>();
+            e.Property(x => x.TargetType).HasMaxLength(50).IsRequired();
+            e.Property(x => x.TargetName).HasMaxLength(200);
+            e.Property(x => x.SubmittedBy).HasMaxLength(100).IsRequired();
+            e.Property(x => x.DecidedBy).HasMaxLength(100);
+            e.Property(x => x.SubmissionReason).HasMaxLength(500);
+            e.Property(x => x.DecisionReason).HasMaxLength(500);
+            e.HasIndex(x => x.Status);
+            e.HasIndex(x => new { x.TargetType, x.TargetId, x.Status });
         });
     }
 }

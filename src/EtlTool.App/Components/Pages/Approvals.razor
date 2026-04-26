@@ -1,0 +1,288 @@
+@page "/approvals"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+@inject EtlTool.Data.Repositories.ApprovalRepository ApprovalRepo
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Core.Scheduling.SchedulerService Scheduler
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>覆核佇列</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">覆核佇列 <small class="text-muted">(Two-man rule)</small></h1>
+    <div>
+        @if (_pending is not null)
+        {
+            <span class="badge bg-warning text-dark">待覆核 @_pending.Count</span>
+        }
+    </div>
+</div>
+
+<div class="alert alert-secondary">
+    <strong>銀行控管：兩人覆核（Maker-Checker）原則</strong>。
+    高風險操作（刪除連線、刪除任務）必須由 A 提交、由不同帳號的 Admin 核准後才會真正執行。
+    過期未決定（預設 7 天）會自動標記為 Expired。
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div>
+}
+
+<h2 class="h4 mt-4">待核准</h2>
+@if (_pending is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_pending.Count == 0)
+{
+    <div class="empty-state">
+        <p class="m-0">目前沒有待覆核的請求。</p>
+    </div>
+}
+else
+{
+    <div class="card">
+    <table class="table mb-0 align-middle">
+        <thead>
+            <tr>
+                <th>動作</th>
+                <th>目標</th>
+                <th>提交者</th>
+                <th>提交時間</th>
+                <th>到期</th>
+                <th>原因</th>
+                <th class="text-end">決定</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var r in _pending)
+        {
+            var isSelf = string.Equals(r.SubmittedBy, _currentUsername, StringComparison.Ordinal);
+            <tr>
+                <td><span class="badge @(r.Action == ApprovalAction.DeleteConnection ? "bg-danger" : "bg-warning text-dark")">@ActionLabel(r.Action)</span></td>
+                <td><strong>@r.TargetName</strong> <small class="text-muted">(@r.TargetType)</small></td>
+                <td>@r.SubmittedBy</td>
+                <td class="small text-muted">@r.SubmittedAt.ToLocalTime().ToString("MM-dd HH:mm")</td>
+                <td class="small text-muted">@r.ExpiresAt.ToLocalTime().ToString("MM-dd HH:mm")</td>
+                <td class="small">@(string.IsNullOrEmpty(r.SubmissionReason) ? "—" : r.SubmissionReason)</td>
+                <td class="text-end">
+                    @if (isSelf)
+                    {
+                        <span class="badge bg-secondary" title="你不能核准自己提交的請求">不可自核</span>
+                    }
+                    else
+                    {
+                        <button class="btn btn-sm btn-success me-1" @onclick="() => OpenDecide(r, true)" disabled="@(_busy == r.Id)">
+                            <Icon Name="check" /> 核准
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" @onclick="() => OpenDecide(r, false)" disabled="@(_busy == r.Id)">
+                            <Icon Name="x" /> 拒絕
+                        </button>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    </div>
+}
+
+<h2 class="h4 mt-5">最近 20 筆</h2>
+@if (_recent is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_recent.Count == 0)
+{
+    <p class="text-muted">尚無紀錄。</p>
+}
+else
+{
+    <div class="card">
+    <table class="table mb-0 align-middle">
+        <thead>
+            <tr>
+                <th>狀態</th>
+                <th>動作</th>
+                <th>目標</th>
+                <th>提交者</th>
+                <th>決定者</th>
+                <th>提交</th>
+                <th>決定</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var r in _recent)
+        {
+            <tr>
+                <td>@StatusBadge(r.Status)</td>
+                <td>@ActionLabel(r.Action)</td>
+                <td><strong>@r.TargetName</strong></td>
+                <td class="small">@r.SubmittedBy</td>
+                <td class="small">@(r.DecidedBy ?? "—")</td>
+                <td class="small text-muted">@r.SubmittedAt.ToLocalTime().ToString("MM-dd HH:mm")</td>
+                <td class="small text-muted">@(r.DecidedAt?.ToLocalTime().ToString("MM-dd HH:mm") ?? "—")</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+    </div>
+}
+
+@if (_showDecide && _decideTarget is not null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">@(_decideApprove ? "核准" : "拒絕") @ActionLabel(_decideTarget.Action)</h5>
+                </div>
+                <div class="modal-body">
+                    <p>
+                        目標：<strong>@_decideTarget.TargetName</strong> (@_decideTarget.TargetType)<br />
+                        提交者：@_decideTarget.SubmittedBy
+                    </p>
+                    @if (_decideApprove)
+                    {
+                        <div class="alert alert-warning">
+                            <strong>注意：</strong>核准後會立即執行該動作（不可復原）。
+                        </div>
+                    }
+                    <label class="form-label">理由（會記入稽核）</label>
+                    <textarea class="form-control" rows="3" @bind="_decideReason"></textarea>
+                    @if (_modalError is not null) { <div class="alert alert-danger mt-2">@_modalError</div> }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showDecide = false" disabled="@_busy.HasValue">取消</button>
+                    @if (_decideApprove)
+                    {
+                        <button class="btn btn-success" @onclick="ConfirmApprove" disabled="@_busy.HasValue">確認核准並執行</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-danger" @onclick="ConfirmReject" disabled="@_busy.HasValue">確認拒絕</button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<ApprovalRequest>? _pending;
+    private List<ApprovalRequest>? _recent;
+    private string? _currentUsername;
+    private string? _message;
+    private bool _isError;
+
+    private bool _showDecide;
+    private bool _decideApprove;
+    private ApprovalRequest? _decideTarget;
+    private string _decideReason = "";
+    private string? _modalError;
+    private Guid? _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _currentUsername = state.User.Identity?.Name;
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        _pending = await ApprovalRepo.ListPendingAsync(CancellationToken.None);
+        _recent = await ApprovalRepo.ListRecentAsync(20, CancellationToken.None);
+        StateHasChanged();
+    }
+
+    private void OpenDecide(ApprovalRequest r, bool approve)
+    {
+        _decideTarget = r;
+        _decideApprove = approve;
+        _decideReason = "";
+        _modalError = null;
+        _showDecide = true;
+    }
+
+    private async Task ConfirmApprove()
+    {
+        if (_decideTarget is null || _currentUsername is null) return;
+        _modalError = null;
+        _busy = _decideTarget.Id;
+        try
+        {
+            // 1) 標記 Approved（內含 self-approval 檢查 — repo 會擋）
+            var req = await ApprovalRepo.ApproveAsync(
+                _decideTarget.Id, _currentUsername, _decideReason, CancellationToken.None);
+
+            // 2) 真正執行該高風險動作
+            switch (req.Action)
+            {
+                case ApprovalAction.DeleteConnection:
+                    await ConnRepo.DeleteAsync(req.TargetId, CancellationToken.None);
+                    break;
+
+                case ApprovalAction.DeleteTask:
+                    await Scheduler.UnscheduleAsync(req.TargetId, CancellationToken.None);
+                    await TaskRepo.DeleteAsync(req.TargetId, CancellationToken.None);
+                    break;
+            }
+
+            _showDecide = false;
+            _isError = false;
+            _message = $"已核准並執行：「{req.TargetName}」({ActionLabel(req.Action)})";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _modalError = ex.Message;
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private async Task ConfirmReject()
+    {
+        if (_decideTarget is null || _currentUsername is null) return;
+        _modalError = null;
+        _busy = _decideTarget.Id;
+        try
+        {
+            var req = await ApprovalRepo.RejectAsync(
+                _decideTarget.Id, _currentUsername, _decideReason, CancellationToken.None);
+            _showDecide = false;
+            _isError = false;
+            _message = $"已拒絕「{req.TargetName}」的{ActionLabel(req.Action)}請求";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _modalError = ex.Message;
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private static string ActionLabel(ApprovalAction a) => a switch
+    {
+        ApprovalAction.DeleteConnection => "刪除連線",
+        ApprovalAction.DeleteTask => "刪除任務",
+        _ => a.ToString(),
+    };
+
+    private static MarkupString StatusBadge(ApprovalStatus s) => s switch
+    {
+        ApprovalStatus.Pending  => new MarkupString("<span class=\"badge bg-warning text-dark\">Pending</span>"),
+        ApprovalStatus.Approved => new MarkupString("<span class=\"badge bg-success\">Approved</span>"),
+        ApprovalStatus.Rejected => new MarkupString("<span class=\"badge bg-secondary\">Rejected</span>"),
+        ApprovalStatus.Expired  => new MarkupString("<span class=\"badge bg-light text-dark\">Expired</span>"),
+        _ => new MarkupString(s.ToString()),
+    };
+}
