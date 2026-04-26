@@ -31,3 +31,13 @@ public enum TriggerType
     Manual = 2,
     Retry = 3,
 }
+
+public enum SchemaDriftPolicy
+{
+    /// <summary>不檢查 schema drift。</summary>
+    Ignore = 0,
+    /// <summary>檢查並 audit warning，但仍執行。</summary>
+    Warn = 1,
+    /// <summary>檢查到 mapping 受影響的 drift 就 fail-fast，不執行 ETL。</summary>
+    Fail = 2,
+}

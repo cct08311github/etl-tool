@@ -64,6 +64,15 @@ public sealed class EtlEngine
             var sourceConnector = _factory.Create(sourceDef);
             var targetConnector = _factory.Create(targetDef);
 
+            // Schema drift 預檢（在開 transaction 之前；fail 時直接結束 run）
+            await PreflightSchemaDriftAsync(task, sourceConnector, targetConnector, run, ct);
+            if (run.Status == RunStatus.Failed)
+            {
+                run.FinishedAt = DateTime.UtcNow;
+                await _runSink.PersistAsync(run, ct);
+                return run;
+            }
+
             await using var srcConn = await sourceConnector.OpenAsync(ct);
             await using var tgtConn = await targetConnector.OpenAsync(ct);
 
@@ -367,6 +376,90 @@ public sealed class EtlEngine
 
     private static string AppendSql(string? existing, string add)
         => string.IsNullOrEmpty(existing) ? add : existing + "\n\n" + add;
+
+    /// <summary>
+    /// 執行前的 schema drift 檢查。
+    /// - Ignore：直接 return
+    /// - Warn：對來源/目標各自比對，drift 寫 audit (severity Warning) 後仍繼續執行
+    /// - Fail：若 mapping 受影響的 drift 存在 → run.Status = Failed，run.ErrorMessage 列出
+    /// </summary>
+    private async Task PreflightSchemaDriftAsync(
+        EtlTask task, IDbConnector source, IDbConnector target, RunHistory run, CancellationToken ct)
+    {
+        if (task.SchemaDriftPolicy == SchemaDriftPolicy.Ignore) return;
+        if (string.IsNullOrEmpty(task.SourceSchemaSnapshotJson)
+            && string.IsNullOrEmpty(task.TargetSchemaSnapshotJson)) return;
+
+        var mappedSrc = task.Mappings.Select(m => m.SourceColumn).Where(c => !string.IsNullOrEmpty(c)).ToList();
+        var mappedTgt = task.Mappings.Select(m => m.TargetColumn).Where(c => !string.IsNullOrEmpty(c)).ToList();
+
+        var drifts = new List<(string side, SchemaDriftReport report)>();
+
+        if (!string.IsNullOrEmpty(task.SourceSchemaSnapshotJson))
+        {
+            try
+            {
+                var snap = JsonSerializer.Deserialize<List<ColumnInfo>>(task.SourceSchemaSnapshotJson!) ?? new();
+                var current = (await source.ListColumnsAsync(task.SourceSchema, task.SourceTable, ct)).ToList();
+                var rep = SchemaDriftDetector.Compare(snap, current, mappedSrc);
+                if (rep.HasDrift) drifts.Add(("Source", rep));
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to compare source schema snapshot for {TaskName}", task.Name);
+            }
+        }
+
+        if (!string.IsNullOrEmpty(task.TargetSchemaSnapshotJson))
+        {
+            try
+            {
+                var snap = JsonSerializer.Deserialize<List<ColumnInfo>>(task.TargetSchemaSnapshotJson!) ?? new();
+                var current = (await target.ListColumnsAsync(task.TargetSchema, task.TargetTable, ct)).ToList();
+                var rep = SchemaDriftDetector.Compare(snap, current, mappedTgt);
+                if (rep.HasDrift) drifts.Add(("Target", rep));
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Failed to compare target schema snapshot for {TaskName}", task.Name);
+            }
+        }
+
+        if (drifts.Count == 0) return;
+
+        var summary = string.Join("；", drifts.Select(d => $"{d.side}: {d.report.ShortSummary()}"));
+        var details = JsonSerializer.Serialize(drifts.Select(d => new
+        {
+            side = d.side,
+            summary = d.report.ShortSummary(),
+            affectingMapping = d.report.AffectingMappedColumns,
+            items = d.report.Items.Select(i => new { i.ColumnName, kind = i.Kind.ToString(), i.Was, i.IsNow }),
+        }));
+
+        bool affecting = drifts.Any(d => (d.report.AffectingMappedColumns ?? 0) > 0);
+
+        if (task.SchemaDriftPolicy == SchemaDriftPolicy.Fail && affecting)
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage = $"Schema drift 偵測中止執行（policy=Fail）：{summary}";
+            if (_audit is not null)
+                await _audit.LogAsync(AuditCategory.Run, AuditAction.RunFailed,
+                    $"任務「{task.Name}」schema drift 觸發 fail-fast：{summary}",
+                    targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                    severity: AuditSeverity.Error, detailsJson: details, ct: ct);
+            return;
+        }
+
+        // Warn (or Fail with no mapping-affecting drift) → 繼續執行但 audit
+        if (_audit is not null)
+        {
+            await _audit.LogAsync(AuditCategory.Run, AuditAction.RunStarted,
+                $"⚠ 任務「{task.Name}」偵測到 schema drift（仍會執行）：{summary}",
+                targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                severity: affecting ? AuditSeverity.Warning : AuditSeverity.Info,
+                detailsJson: details, ct: ct);
+        }
+    }
 
     /// <summary>
     /// PII 遮罩規則：

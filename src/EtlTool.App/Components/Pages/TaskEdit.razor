@@ -237,6 +237,53 @@ else
     </div>
 
     <div class="card mb-3">
+        <div class="card-header">Schema 漂移偵測 (banking 等級資料完整性檢查)</div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">
+                每次儲存任務時自動快照當下的來源/目標欄位定義。執行 ETL 前會比對目前 schema 與快照，
+                若上游加欄/移欄/改型 → 依下方政策處置。
+            </p>
+            <div class="row g-2 mb-2">
+                <div class="col-md-12">
+                    <div class="form-check form-check-inline">
+                        <input type="radio" class="form-check-input" id="sd-ignore" name="sdpol"
+                               checked="@(_task.SchemaDriftPolicy == SchemaDriftPolicy.Ignore)"
+                               @onchange="() => _task.SchemaDriftPolicy = SchemaDriftPolicy.Ignore" />
+                        <label class="form-check-label" for="sd-ignore">不檢查 (Ignore)</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input type="radio" class="form-check-input" id="sd-warn" name="sdpol"
+                               checked="@(_task.SchemaDriftPolicy == SchemaDriftPolicy.Warn)"
+                               @onchange="() => _task.SchemaDriftPolicy = SchemaDriftPolicy.Warn" />
+                        <label class="form-check-label" for="sd-warn">僅警告 (Warn) — 寫 audit 但仍執行</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input type="radio" class="form-check-input" id="sd-fail" name="sdpol"
+                               checked="@(_task.SchemaDriftPolicy == SchemaDriftPolicy.Fail)"
+                               @onchange="() => _task.SchemaDriftPolicy = SchemaDriftPolicy.Fail" />
+                        <label class="form-check-label" for="sd-fail">直接失敗 (Fail) — mapping 受影響時立即停止</label>
+                    </div>
+                </div>
+            </div>
+            <div class="text-muted small">
+                <strong>目前 schema 快照：</strong>
+                @if (_task.SchemaSnapshotAt.HasValue)
+                {
+                    <code>@_task.SchemaSnapshotAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</code>
+                    <span class="ms-2">
+                        (來源 @SnapshotColumnCount(_task.SourceSchemaSnapshotJson) 欄 ·
+                        目標 @SnapshotColumnCount(_task.TargetSchemaSnapshotJson) 欄)
+                    </span>
+                }
+                else
+                {
+                    <span class="text-warning">尚未建立 — 儲存任務時會自動建立。</span>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
         <div class="card-header">隱私保護</div>
         <div class="card-body">
             <div class="form-check form-switch">
@@ -561,6 +608,14 @@ else
             return;
         }
 
+        // 捕捉 schema 快照（用使用者選表時已載入的欄位資訊）
+        if (_sourceColumns.Count > 0)
+            _task.SourceSchemaSnapshotJson = System.Text.Json.JsonSerializer.Serialize(_sourceColumns);
+        if (_targetColumns.Count > 0)
+            _task.TargetSchemaSnapshotJson = System.Text.Json.JsonSerializer.Serialize(_targetColumns);
+        if (_sourceColumns.Count > 0 || _targetColumns.Count > 0)
+            _task.SchemaSnapshotAt = DateTime.UtcNow;
+
         try
         {
             EtlTool.Core.Models.EtlTask saved;
@@ -646,5 +701,16 @@ else
         if (s < 60) return $"{s:0}s";
         if (s < 3600) return $"{s / 60:0.#}m";
         return $"{s / 3600:0.#}h";
+    }
+
+    private static int SnapshotColumnCount(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return 0;
+        try
+        {
+            var arr = System.Text.Json.JsonSerializer.Deserialize<List<EtlTool.Core.Models.ColumnInfo>>(json);
+            return arr?.Count ?? 0;
+        }
+        catch { return 0; }
     }
 }

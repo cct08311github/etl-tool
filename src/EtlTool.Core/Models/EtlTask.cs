@@ -54,6 +54,23 @@ public class EtlTask
     /// </summary>
     public bool MaskSamplePayload { get; set; } = false;
 
+    /// <summary>
+    /// Schema drift 偵測政策：
+    ///   Ignore — 不檢查
+    ///   Warn   — 檢查並 audit，但執行
+    ///   Fail   — 影響到 mapping 的差異 → 直接 fail-fast 不執行 ETL
+    /// </summary>
+    public SchemaDriftPolicy SchemaDriftPolicy { get; set; } = SchemaDriftPolicy.Warn;
+
+    /// <summary>來源 schema 的快照 (JSON ColumnInfo[])，建立 / 編輯 / 重新捕捉時更新。</summary>
+    public string? SourceSchemaSnapshotJson { get; set; }
+
+    /// <summary>目標 schema 的快照 (JSON ColumnInfo[])。</summary>
+    public string? TargetSchemaSnapshotJson { get; set; }
+
+    /// <summary>快照建立時間（UTC）。</summary>
+    public DateTime? SchemaSnapshotAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
