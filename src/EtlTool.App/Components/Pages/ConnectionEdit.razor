@@ -148,6 +148,45 @@ else
     {
         <div class="alert mt-3 @(_isError ? "alert-danger" : "alert-success")">@_message</div>
     }
+
+    @if (_weakWarn is not null)
+    {
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header bg-warning">
+                        <h5 class="modal-title">⚠ 弱密碼風險偵測</h5>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-2">系統發現此連線字串可能使用弱密碼或開發環境預設帳密：</p>
+                        <div class="alert alert-warning mb-0">
+                            <strong>@_weakWarn.Kind</strong><br />
+                            @_weakWarn.Detail
+                        </div>
+                        @if (_weakBlocking)
+                        {
+                            <p class="mt-3 mb-0 small text-danger">
+                                ⛔ 此風險為 <strong>blocking</strong>，無法直接儲存。請先強化密碼後再試。
+                            </p>
+                        }
+                        else
+                        {
+                            <p class="mt-3 mb-0 small text-muted">
+                                你可以選擇取消修改密碼，或確認後仍儲存（會記入稽核）。
+                            </p>
+                        }
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @onclick="() => _weakWarn = null">取消</button>
+                        @if (!_weakBlocking)
+                        {
+                            <button class="btn btn-warning" @onclick="ConfirmSaveDespiteWarn">仍要儲存</button>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
 }
 
 @code {
@@ -158,6 +197,10 @@ else
     private string? _message;
     private bool _isError;
     private string? _currentUsername;
+
+    private EtlTool.Core.Engine.WeakCredentialDetector.DetectionResult? _weakWarn;
+    private bool _weakBlocking;
+    private bool _confirmedDespiteWarn;
 
     private EtlTool.Connectors.OracleParts _ora = EtlTool.Connectors.ConnectionStringHelper.DefaultOracle();
     private EtlTool.Connectors.SqlServerParts _sql = EtlTool.Connectors.ConnectionStringHelper.DefaultSqlServer();
@@ -221,6 +264,8 @@ else
         if (_form is null) return;
         try
         {
+            // 1) 預先把 newCs 算出來（與後面真正要存的一致），跑 weak credential 檢查
+            string? plainForCheck = null;
             if (Id is null)
             {
                 if (string.IsNullOrWhiteSpace(_form.ConnectionString))
@@ -228,6 +273,32 @@ else
                     _isError = true; _message = "請填入連線資訊。";
                     return;
                 }
+                plainForCheck = _form.ConnectionString;
+            }
+            else
+            {
+                if (_advancedMode && !string.IsNullOrWhiteSpace(_form.ConnectionString))
+                    plainForCheck = _form.ConnectionString;
+                else if (!_advancedMode)
+                {
+                    // 模擬實際 build 出來的 CS（含 password merge）— 簡化版
+                    plainForCheck = _form.ConnectionString;
+                }
+            }
+
+            if (!_confirmedDespiteWarn && !string.IsNullOrWhiteSpace(plainForCheck))
+            {
+                var detection = EtlTool.Core.Engine.WeakCredentialDetector.Inspect(plainForCheck!);
+                if (detection.Kind != EtlTool.Core.Engine.WeakCredentialKind.None)
+                {
+                    _weakWarn = detection;
+                    _weakBlocking = EtlTool.Core.Engine.WeakCredentialDetector.IsBlocking(detection.Kind);
+                    return; // 顯示 modal，讓使用者決定
+                }
+            }
+
+            if (Id is null)
+            {
                 await ConnRepo.CreateAsync(_form.Name, _form.ProviderType, _form.ConnectionString, Protector, CancellationToken.None, actor: _currentUsername);
             }
             else
@@ -268,6 +339,14 @@ else
         {
             _isError = true; _message = $"儲存失敗：{ex.Message}";
         }
+    }
+
+    private async Task ConfirmSaveDespiteWarn()
+    {
+        // 把 weak warn modal 關掉，並標記已確認 → 讓 Save() 跳過檢查直接存
+        _weakWarn = null;
+        _confirmedDespiteWarn = true;
+        await Save();
     }
 
     private async Task Test()

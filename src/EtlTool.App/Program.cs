@@ -138,6 +138,7 @@ builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOpt
 builder.Services.AddSingleton<UserAuthService>();
 builder.Services.AddSingleton(builder.Configuration.GetSection("Auth:Lockout").Get<LoginLockoutOptions>() ?? new LoginLockoutOptions());
 builder.Services.AddSingleton<LoginLockoutService>();
+builder.Services.AddSingleton<AdminIpAllowlistService>();
 builder.Services.AddCascadingAuthenticationState();
 
 // 讀 Auth 設定來決定 cookie ExpireTimeSpan（銀行預設 30 分鐘無操作即逾時）
@@ -205,6 +206,9 @@ app.UseSecurityHeaders();
 
 app.UseAuthentication();
 app.UseAuthorization();
+// IP allowlist must run **after** authentication so we know if user is Admin,
+// and **before** route execution so 403 is returned before page renders.
+app.UseAdminIpAllowlist();
 app.UseAntiforgery();
 // 靜態資源（CSS / JS / 圖片 / Bootstrap / Inter 字體 fallback 等）必須匿名可達，
 // 否則登入頁本身的樣式會破版且 favicon / blazor.web.js 會被導向回登入頁。

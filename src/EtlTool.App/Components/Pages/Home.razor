@@ -3,6 +3,7 @@
 @inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Data.Repositories.AuditChainVerifier ChainVerifier
 @inject EtlTool.Core.Scheduling.SchedulerKillSwitch KillSwitch
 @inject AuthenticationStateProvider AuthState
 
@@ -33,6 +34,35 @@
         。所有排程觸發的 ETL 都會 skip；手動觸發仍可執行。
     </div>
 }
+
+@* Audit chain integrity banner — Admin only。每 5 分鐘 cache 一次結果。 *@
+<AuthorizeView Roles="Admin">
+    <Authorized>
+        @if (_chainResult is not null)
+        {
+            <div class="alert @(_chainResult.IsIntact ? "alert-success" : "alert-danger") py-2 px-3 mb-3 d-flex justify-content-between align-items-center">
+                <div>
+                    @if (_chainResult.IsIntact)
+                    {
+                        <Icon Name="check" />
+                        <span class="ms-2"><strong>稽核鏈完整</strong> — 已驗證 @_chainResult.TotalChecked 筆事件，hash chain 無竄改跡象</span>
+                    }
+                    else
+                    {
+                        <Icon Name="alert-triangle" />
+                        <span class="ms-2"><strong>⛔ 稽核鏈異常 — 第 @_chainResult.TotalChecked 筆</strong>：@_chainResult.Reason</span>
+                    }
+                </div>
+                <div>
+                    <small class="text-muted">@(_chainCheckedAt.HasValue ? FormatRelative(_chainCheckedAt.Value) : "")</small>
+                    <button class="icon-btn ms-2" title="重新驗證" @onclick="ReverifyChainAsync" disabled="@_chainBusy">
+                        <Icon Name="@(_chainBusy ? "loader" : "refresh")" />
+                    </button>
+                </div>
+            </div>
+        }
+    </Authorized>
+</AuthorizeView>
 
 @if (_showPauseModal)
 {
@@ -160,6 +190,14 @@ else
     private List<EtlTool.Core.Models.RunHistory> _recentRuns = new();
     private Dictionary<Guid, string> _taskNames = new();
 
+    // Audit chain integrity — cache (process-wide) so 多 admin 開頁面不重複跑全表
+    private static EtlTool.Data.Repositories.AuditChainVerifier.VerifyResult? _cachedChainResult;
+    private static DateTime? _cachedChainAt;
+    private EtlTool.Data.Repositories.AuditChainVerifier.VerifyResult? _chainResult;
+    private DateTime? _chainCheckedAt;
+    private bool _chainBusy;
+    private static readonly TimeSpan ChainCacheTtl = TimeSpan.FromMinutes(5);
+
     protected override async Task OnInitializedAsync()
     {
         var ct = CancellationToken.None;
@@ -179,6 +217,52 @@ else
         _recentRuns = runs.Take(15).ToList();
 
         _loading = false;
+
+        // Audit chain：admin 才跑；用 5 分鐘 cache，避免每次 dashboard 進來都全表 SHA-256
+        var state = await AuthState.GetAuthenticationStateAsync();
+        if (state.User.IsInRole("Admin"))
+        {
+            if (_cachedChainResult is not null && _cachedChainAt is not null
+                && DateTime.UtcNow - _cachedChainAt.Value < ChainCacheTtl)
+            {
+                _chainResult = _cachedChainResult;
+                _chainCheckedAt = _cachedChainAt;
+            }
+            else
+            {
+                await ReverifyChainAsync();
+            }
+        }
+    }
+
+    private async Task ReverifyChainAsync()
+    {
+        _chainBusy = true;
+        try
+        {
+            var result = await ChainVerifier.VerifyAsync(CancellationToken.None);
+            _chainResult = result;
+            _chainCheckedAt = DateTime.UtcNow;
+            _cachedChainResult = result;
+            _cachedChainAt = _chainCheckedAt;
+        }
+        catch (Exception ex)
+        {
+            _chainResult = new EtlTool.Data.Repositories.AuditChainVerifier.VerifyResult(
+                false, 0, null, $"驗證失敗：{ex.Message}");
+        }
+        finally
+        {
+            _chainBusy = false;
+        }
+    }
+
+    private static string FormatRelative(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        if (diff.TotalSeconds < 60) return "剛剛驗證";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes} 分鐘前驗證";
+        return $"{(int)diff.TotalHours} 小時前驗證";
     }
 
     private async Task ConfirmPause()
