@@ -133,6 +133,53 @@ else
         </table>
     </div>
 
+    @if (_autoDisabled is not null && _autoDisabled.Count > 0)
+    {
+        <div class="card mb-3 border-danger">
+            <div class="card-header bg-danger text-white">⛔ 自動停用任務 (@_autoDisabled.Count)</div>
+            <table class="table mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 25%">任務</th>
+                        <th style="width: 18%">停用時間</th>
+                        <th>原因</th>
+                        <th style="width: 80px"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var t in _autoDisabled)
+                {
+                    <tr>
+                        <td><strong>@t.Name</strong></td>
+                        <td class="small text-muted">@t.AutoDisabledAt?.ToLocalTime():yyyy-MM-dd HH:mm</td>
+                        <td class="small">@t.AutoDisabledReason</td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-secondary" href="@($"tasks/{t.Id}")">編輯</a>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+            <div class="card-footer small text-muted">
+                Circuit-breaker 因連續失敗自動停用的任務。Admin 修復問題後請至列表逐筆走「我已確認問題已修復」確認流程。
+            </div>
+        </div>
+    }
+
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>SQLite 一鍵備份</span>
+            <a class="btn btn-sm btn-primary" href="/Account/SqliteBackup" target="_blank">
+                <Icon Name="download" /> 下載備份檔
+            </a>
+        </div>
+        <div class="card-body small text-muted">
+            點擊「下載備份檔」會在伺服器執行 SQLite <code>VACUUM INTO</code> 產生一致性備份，
+            然後串流下載 <code>etltool-YYYYMMDD-HHmmss.db</code>。產生過程不阻斷其他連線；
+            備份檔可由其他工具開啟驗證或匯入到 staging 環境。每次下載寫一筆 audit。
+        </div>
+    </div>
+
     <div class="card mb-3">
         <div class="card-header">維護視窗 (Maintenance Windows)</div>
         @{
@@ -220,6 +267,7 @@ else
 
     private string? _chainHeadHash;
     private string? _chainTailHash;
+    private List<EtlTool.Core.Models.EtlTask>? _autoDisabled;
 
     private record WebhookTestResult(bool Ok, int? StatusCode, string? Error);
     private WebhookTestResult? _webhookTestResult;
@@ -324,6 +372,13 @@ else
                     .Select(e => e.Hash).FirstOrDefaultAsync();
             }
             catch { /* shrug */ }
+
+            // Auto-disabled tasks
+            _autoDisabled = await Db.EtlTasks
+                .AsNoTracking()
+                .Where(t => t.AutoDisabledAt != null)
+                .OrderByDescending(t => t.AutoDisabledAt)
+                .ToListAsync();
         }
         finally
         {

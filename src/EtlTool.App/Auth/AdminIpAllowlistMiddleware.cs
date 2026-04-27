@@ -21,6 +21,7 @@ public sealed class AdminIpAllowlistMiddleware
         "/scheduler",                  // scheduler inspection — diagnostic but reveals job structure
         "/system",                     // system info page — paths, sizes, webhook URL host (masked but still)
         "/Account/AuditExport",        // downloading full audit trail = sensitive
+        "/Account/SqliteBackup",       // downloading entire DB = extremely sensitive
     };
 
     private readonly RequestDelegate _next;
