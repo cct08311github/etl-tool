@@ -115,6 +115,15 @@ public sealed class EtlEngine
 
                 var batch = new List<object?[]>(task.BatchSize);
                 var samplePayload = new List<Dictionary<string, object?>>();
+                // 預先用 PiiDetector 把目標欄位分類，避免 sample loop 內每 row 重算。
+                // 三種命運：
+                //   1) MaskSamplePayload=true（paranoid 模式）→ 全欄位都遮
+                //   2) MaskSamplePayload=false 但欄位名疑似 PII → 仍遮（安全預設）
+                //   3) 其他 → 原樣
+                var piiKindByCol = new Dictionary<string, PiiDetector.PiiKind>(StringComparer.OrdinalIgnoreCase);
+                foreach (var c in targetCols)
+                    piiKindByCol[c] = PiiDetector.Inspect(c).Kind;
+                var maskedCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 long rowsRead = 0;
                 long rowsWritten = 0;
@@ -157,7 +166,20 @@ public sealed class EtlEngine
                     {
                         var sample = new Dictionary<string, object?>(targetCols.Count);
                         for (int i = 0; i < targetCols.Count; i++)
-                            sample[targetCols[i]] = task.MaskSamplePayload ? MaskValue(row[i]) : row[i];
+                        {
+                            var col = targetCols[i];
+                            var raw = row[i];
+                            var shouldMask = task.MaskSamplePayload || piiKindByCol[col] != PiiDetector.PiiKind.None;
+                            if (shouldMask)
+                            {
+                                sample[col] = MaskValue(raw);
+                                maskedCols.Add(col);
+                            }
+                            else
+                            {
+                                sample[col] = raw;
+                            }
+                        }
                         samplePayload.Add(sample);
                     }
 
@@ -186,7 +208,24 @@ public sealed class EtlEngine
                         targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
                         severity: AuditSeverity.Warning, ct: ct);
                 }
-                run.SamplePayloadJson = JsonSerializer.Serialize(samplePayload);
+                // 序列化 sample 連同遮罩中繼資料，UI 可顯示「此欄位已自動遮罩 (PII detected)」
+                // 若沒有任何欄位被遮 → 退回舊格式（純 array）保留向後相容
+                if (maskedCols.Count == 0)
+                {
+                    run.SamplePayloadJson = JsonSerializer.Serialize(samplePayload);
+                }
+                else
+                {
+                    run.SamplePayloadJson = JsonSerializer.Serialize(new
+                    {
+                        rows = samplePayload,
+                        meta = new
+                        {
+                            maskedColumns = maskedCols.OrderBy(c => c, StringComparer.OrdinalIgnoreCase).ToArray(),
+                            mode = task.MaskSamplePayload ? "MaskAll" : "SmartMaskPii",
+                        },
+                    });
+                }
                 run.Status = RunStatus.Success;
                 run.FinishedAt = DateTime.UtcNow;
                 await _runSink.PersistAsync(run, ct);

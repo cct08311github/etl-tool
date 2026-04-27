@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using EtlTool.Core.Engine;
 using EtlTool.Core.Models;
@@ -14,6 +16,14 @@ namespace EtlTool.App.Services;
 ///   - HTTP 5 秒 timeout，避免拖慢失敗處理
 ///   - 失敗只 log 不 throw — webhook 掛掉不能影響 ETL 失敗本身
 ///   - 對 Recovery / 高 streak 有不同視覺 emphasis（透過 ErrorMessage 前綴判斷）
+///
+/// HMAC 簽章（Stripe-style，receiver 可驗證來源真的是 EtlTool 而非偽造）：
+///   - 設了 Webhooks:SigningSecret → 每個 POST 都加：
+///       X-Etl-Timestamp: &lt;unix_seconds&gt;
+///       X-Etl-Signature: sha256=&lt;hex&gt; （HMAC-SHA256("&lt;ts&gt;.&lt;body&gt;", secret)）
+///   - 沒設 → 不加 header（向後相容；Slack/Teams 不會檢查反正）
+///   - 自己寫 receiver 時：先驗證 timestamp 與 now 差距 ≤ 5 分（防 replay），
+///     再用同樣的 secret 算 HMAC 比對 hex（建議 timing-safe compare）。
 /// </summary>
 public sealed class HttpFailureNotifier : IFailureNotifier
 {
@@ -61,10 +71,8 @@ public sealed class HttpFailureNotifier : IFailureNotifier
         {
             using var http = _httpFactory.CreateClient("FailureWebhook");
             http.Timeout = TimeSpan.FromSeconds(5);
-            using var content = new StringContent(
-                System.Text.Json.JsonSerializer.Serialize(payload),
-                System.Text.Encoding.UTF8, "application/json");
-            using var resp = await http.PostAsync(url, content, ct);
+            using var req = BuildSignedRequest(url, payload);
+            using var resp = await http.SendAsync(req, ct);
             return (resp.IsSuccessStatusCode, (int)resp.StatusCode, resp.IsSuccessStatusCode ? null : resp.ReasonPhrase);
         }
         catch (TaskCanceledException)
@@ -92,11 +100,8 @@ public sealed class HttpFailureNotifier : IFailureNotifier
         {
             using var http = _httpFactory.CreateClient("FailureWebhook");
             http.Timeout = TimeSpan.FromSeconds(5);
-            using var content = new StringContent(
-                JsonSerializer.Serialize(payload),
-                System.Text.Encoding.UTF8,
-                "application/json");
-            using var resp = await http.PostAsync(url, content, ct);
+            using var req = BuildSignedRequest(url, payload);
+            using var resp = await http.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
             {
                 _log.LogWarning("Failure webhook returned non-success: {Status} {Reason}",
@@ -111,5 +116,43 @@ public sealed class HttpFailureNotifier : IFailureNotifier
         {
             _log.LogError(ex, "Failure webhook POST threw (URL hidden for security)");
         }
+    }
+
+    /// <summary>
+    /// 建構 POST request 並（若有設 secret）加上 HMAC-SHA256 簽章 header。
+    /// 簽章涵蓋「&lt;timestamp&gt;.&lt;body&gt;」以防 replay attack（receiver 應同時驗 timestamp 在合理範圍）。
+    /// </summary>
+    internal HttpRequestMessage BuildSignedRequest(string url, object payload)
+    {
+        var bodyJson = JsonSerializer.Serialize(payload);
+        var req = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
+        };
+
+        var secret = _config["Webhooks:SigningSecret"];
+        if (!string.IsNullOrEmpty(secret))
+        {
+            var ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            var signedPayload = $"{ts}.{bodyJson}";
+            using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+            var sig = hmac.ComputeHash(Encoding.UTF8.GetBytes(signedPayload));
+            var hex = Convert.ToHexString(sig).ToLowerInvariant();
+            req.Headers.TryAddWithoutValidation("X-Etl-Timestamp", ts);
+            req.Headers.TryAddWithoutValidation("X-Etl-Signature", $"sha256={hex}");
+        }
+
+        return req;
+    }
+
+    /// <summary>
+    /// 給 unit test 用：暴露給定 secret + body 的 hex signature，
+    /// 確認 receiver 實作能對得上。
+    /// </summary>
+    public static string ComputeSignatureForTesting(string secret, string timestamp, string body)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var sig = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{timestamp}.{body}"));
+        return Convert.ToHexString(sig).ToLowerInvariant();
     }
 }

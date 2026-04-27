@@ -178,9 +178,27 @@ else
     @if (!string.IsNullOrEmpty(_run.SamplePayloadJson))
     {
         <div class="card mb-3">
-            <div class="card-header">Sample payload (前 5 筆)</div>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Sample payload (前 5 筆)</span>
+                @if (_maskedColumns is not null && _maskedColumns.Length > 0)
+                {
+                    <span class="badge bg-warning text-dark" title="基於欄位名 PII 啟發式偵測自動遮罩；MaskAll 模式則為任務設定">
+                        🔒 已遮罩 @_maskedColumns.Length 欄（@_maskMode）
+                    </span>
+                }
+            </div>
+            @if (_maskedColumns is not null && _maskedColumns.Length > 0)
+            {
+                <div class="card-body py-2 small text-muted border-bottom">
+                    自動遮罩欄位（PII 偵測命中或 MaskAll 模式）：
+                    @foreach (var c in _maskedColumns)
+                    {
+                        <code class="me-1">@c</code>
+                    }
+                </div>
+            }
             <div class="card-body">
-                <pre class="mb-0">@_run.SamplePayloadJson</pre>
+                <pre class="mb-0">@_displaySampleJson</pre>
             </div>
         </div>
     }
@@ -218,11 +236,59 @@ else
     private List<EtlTool.Core.Models.AuditEvent>? _relatedAudits;
     private List<EtlTool.Core.Models.ColumnInfo>? _schemaSnapshot;
 
+    // Parsed sample payload metadata (populated in OnInitializedAsync after _run loaded).
+    // SamplePayloadJson 在 EtlEngine 端有兩種格式：
+    //   - 舊／無遮罩：純 JSON array of row objects
+    //   - 有遮罩：{ rows: [...], meta: { maskedColumns: [...], mode: "SmartMaskPii"|"MaskAll" } }
+    // 解析失敗時退回原 raw JSON，UI 還是會 render，只是不顯示 meta header。
+    private string[]? _maskedColumns;
+    private string? _maskMode;
+    private string? _displaySampleJson;
+
+    private void ParseSamplePayload()
+    {
+        if (_run is null || string.IsNullOrEmpty(_run.SamplePayloadJson))
+        {
+            _displaySampleJson = _run?.SamplePayloadJson;
+            return;
+        }
+        _displaySampleJson = _run.SamplePayloadJson; // default fallback
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(_run.SamplePayloadJson);
+            var root = doc.RootElement;
+            if (root.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                root.TryGetProperty("rows", out var rowsEl) &&
+                root.TryGetProperty("meta", out var metaEl))
+            {
+                if (metaEl.TryGetProperty("maskedColumns", out var mcEl) &&
+                    mcEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    _maskedColumns = mcEl.EnumerateArray()
+                        .Select(e => e.GetString() ?? "")
+                        .Where(s => s.Length > 0).ToArray();
+                }
+                if (metaEl.TryGetProperty("mode", out var modeEl))
+                {
+                    _maskMode = modeEl.GetString();
+                }
+                _displaySampleJson = System.Text.Json.JsonSerializer.Serialize(rowsEl,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            }
+            // 舊格式（純 array）→ _maskedColumns 留 null，原 raw 直接顯示
+        }
+        catch
+        {
+            // 解析失敗 → 原 raw 顯示
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         var ct = CancellationToken.None;
         _run = await RunRepo.GetAsync(Id, ct);
         if (_run is null) return;
+        ParseSamplePayload();
 
         var t = await TaskRepo.GetWithMappingsAsync(_run.EtlTaskId, ct);
         _taskName = t?.Name;

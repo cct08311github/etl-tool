@@ -147,6 +147,23 @@ else
                     }
                 </td></tr>
                 <tr><th>Failure streak threshold</th><td><code>@_security.FailureStreakThreshold</code> 次</td></tr>
+                <tr><th>Webhook HMAC 簽章</th><td>
+                    @if (_security.WebhookSigned)
+                    {
+                        <span class="badge bg-success">已啟用</span>
+                        <span class="ms-2 small text-muted">
+                            每筆 webhook 帶 <code>X-Etl-Timestamp</code> + <code>X-Etl-Signature: sha256=&lt;hex&gt;</code>，
+                            算法 = <code>HMAC_SHA256(secret, "ts.body")</code>。Receiver 應驗 ts 在合理時窗（建議 ±5 分）後比對 signature。
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-secondary">未啟用</span>
+                        <span class="ms-2 small text-muted">
+                            設定 <code>Webhooks:SigningSecret</code> 後，receiver 可驗證 webhook 真的來自此服務（防偽造）。
+                        </span>
+                    }
+                </td></tr>
                 <tr><th>Audit chain head/tail hash</th><td>
                     <div class="small font-monospace text-break">
                         head: <code>@(_chainHeadHash ?? "—")</code><br />
@@ -560,8 +577,8 @@ else
         int SessionMinutes, int MaxPasswordAgeDays);
     private Retention _retention = new(null, null, null, null, 0, 0);
 
-    private record Security(string? WebhookUrl, string? WebhookFormat, int FailureStreakThreshold);
-    private Security _security = new(null, null, 0);
+    private record Security(string? WebhookUrl, string? WebhookFormat, int FailureStreakThreshold, bool WebhookSigned);
+    private Security _security = new(null, null, 0, false);
 
     private string? _chainHeadHash;
     private string? _chainTailHash;
@@ -869,7 +886,8 @@ else
             _security = new Security(
                 WebhookUrl: Config["Webhooks:OnFailure"],
                 WebhookFormat: Config["Webhooks:Format"],
-                FailureStreakThreshold: Config.GetValue<int?>("Webhooks:FailureStreakThreshold") ?? 3);
+                FailureStreakThreshold: Config.GetValue<int?>("Webhooks:FailureStreakThreshold") ?? 3,
+                WebhookSigned: !string.IsNullOrEmpty(Config["Webhooks:SigningSecret"]));
 
             // API integration panel
             _apiRateLimitPerMinute = Config.GetValue<int?>("Api:RateLimitPerMinute") ?? 60;
