@@ -41,20 +41,33 @@ public static class WebhookPayloadBuilder
         };
     }
 
-    private static object BuildGeneric(EtlTask task, RunHistory run, string? error) => new
+    private static object BuildGeneric(EtlTask task, RunHistory run, string? error)
     {
-        text = $"⚠ ETL 任務狀態：「{task.Name}」({run.Status})",
-        task_id = task.Id.ToString(),
-        task_name = task.Name,
-        run_id = run.Id.ToString(),
-        status = run.Status.ToString(),
-        trigger_type = run.TriggerType.ToString(),
-        started_at = run.StartedAt.ToString("o"),
-        finished_at = run.FinishedAt?.ToString("o"),
-        rows_read = run.RowsRead,
-        rows_written = run.RowsWritten,
-        error = Truncate(error, 1000),
-    };
+        // Failed run 才需要分類；成功 / recovery 直接 Unknown 表示無關
+        var classification = run.Status == RunStatus.Failed && !string.IsNullOrEmpty(run.ErrorMessage)
+            ? EtlTool.Core.Engine.EngineErrorClassifier.Classify(new Exception(run.ErrorMessage))
+            : new EtlTool.Core.Engine.EngineErrorClassifier.Classification(
+                EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Unknown,
+                EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorSubkind.Unknown,
+                "—");
+        return new
+        {
+            text = $"⚠ ETL 任務狀態：「{task.Name}」({run.Status})",
+            task_id = task.Id.ToString(),
+            task_name = task.Name,
+            run_id = run.Id.ToString(),
+            status = run.Status.ToString(),
+            trigger_type = run.TriggerType.ToString(),
+            started_at = run.StartedAt.ToString("o"),
+            finished_at = run.FinishedAt?.ToString("o"),
+            rows_read = run.RowsRead,
+            rows_written = run.RowsWritten,
+            error = Truncate(error, 1000),
+            // 銀行 receiver 可依此 routing：transient → retry queue / permanent → ops ticket
+            error_class = classification.Class.ToString(),
+            error_subkind = classification.Subkind.ToString(),
+        };
+    }
 
     private static object BuildSlack(EtlTask task, RunHistory run, string? error,
         bool isRecovery, bool isStreak, bool isSuccess)

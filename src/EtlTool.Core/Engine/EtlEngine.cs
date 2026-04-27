@@ -260,11 +260,16 @@ public sealed class EtlEngine
         }
         catch (Exception ex)
         {
+            // 分類錯誤性質供 ops 與 audit / webhook 使用（不改 ErrorMessage 內容，
+            // 但 audit detail JSON 會帶上 class/subkind 給 SIEM 可以做 routing）
+            var classification = EngineErrorClassifier.Classify(ex);
+
             run.Status = RunStatus.Failed;
             run.FinishedAt = DateTime.UtcNow;
             run.ErrorMessage = ex.ToString();
             await _runSink.PersistAsync(run, CancellationToken.None);
-            _log.LogError(ex, "ETL {TaskName} ({TaskId}) failed", task.Name, task.Id);
+            _log.LogError(ex, "ETL {TaskName} ({TaskId}) failed [{ErrorClass}/{ErrorSubkind}]: {Reason}",
+                task.Name, task.Id, classification.Class, classification.Subkind, classification.Reason);
 
             // Post-failure SP（best-effort，需重新建立連線因為原來那條已 rollback / dispose）
             if (!string.IsNullOrWhiteSpace(task.PostFailureSp))
@@ -286,10 +291,17 @@ public sealed class EtlEngine
             }
             if (_audit is not null)
                 await _audit.LogAsync(AuditCategory.Run, AuditAction.RunFailed,
-                    $"任務「{task.Name}」執行失敗：{ex.Message}",
+                    $"任務「{task.Name}」執行失敗 [{EngineErrorClassifier.SubkindLabel(classification.Subkind)}]：{ex.Message}",
                     targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
                     severity: AuditSeverity.Error,
-                    detailsJson: System.Text.Json.JsonSerializer.Serialize(new { runId = run.Id, error = ex.GetType().Name }),
+                    detailsJson: System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        runId = run.Id,
+                        error = ex.GetType().Name,
+                        errorClass = classification.Class.ToString(),
+                        errorSubkind = classification.Subkind.ToString(),
+                        classifierReason = classification.Reason,
+                    }),
                     ct: CancellationToken.None);
 
             // Failure webhook 走 outcome 路徑 — streak-aware 會吃掉非門檻次數，避免 alert fatigue
