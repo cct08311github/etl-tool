@@ -179,7 +179,8 @@ public sealed class EtlJob : IJob
             {
                 var run = await _engine.ExecuteAsync(task, trigger, cancel);
                 lastRun = run;
-                return run.Status;
+                // 把 ErrorMessage 帶回 retry policy，讓它能跑 classifier 短路
+                return new RetryPolicy.AttemptResult(run.Status, run.ErrorMessage);
             },
             log: _log,
             ct: ct);

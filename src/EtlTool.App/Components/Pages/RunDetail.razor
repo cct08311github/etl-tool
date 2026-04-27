@@ -111,7 +111,32 @@ else
     @if (!string.IsNullOrEmpty(_run.ErrorMessage))
     {
         <div class="card mb-3 border-danger">
-            <div class="card-header bg-danger text-white">錯誤訊息</div>
+            <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+                <span>錯誤訊息</span>
+                <div>
+                    <span class="badge @ErrorBadgeBg() me-1" title="@(_classification?.Reason ?? "")">
+                        @ErrorBadgeIcon() @EtlTool.Core.Engine.EngineErrorClassifier.ClassLabel(_classification!.Class)
+                    </span>
+                    @if (_classification.Subkind != EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorSubkind.Unknown)
+                    {
+                        <span class="badge bg-light text-dark">
+                            @EtlTool.Core.Engine.EngineErrorClassifier.SubkindLabel(_classification.Subkind)
+                        </span>
+                    }
+                </div>
+            </div>
+            @if (_classification.Class == EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Permanent)
+            {
+                <div class="card-body py-2 small bg-danger-subtle text-danger-emphasis border-bottom">
+                    <strong>判斷：</strong> @_classification.Reason — 重試此類錯誤通常無效，應由 ops 處理（修密碼 / 補權限 / 修 SQL / 補表）後再執行。
+                </div>
+            }
+            else if (_classification.Class == EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Transient)
+            {
+                <div class="card-body py-2 small bg-warning-subtle text-warning-emphasis border-bottom">
+                    <strong>判斷：</strong> @_classification.Reason — 通常重試會通；此 run 為最後一次嘗試。
+                </div>
+            }
             <div class="card-body">
                 <pre class="mb-0">@_run.ErrorMessage</pre>
             </div>
@@ -236,6 +261,23 @@ else
     private List<EtlTool.Core.Models.AuditEvent>? _relatedAudits;
     private List<EtlTool.Core.Models.ColumnInfo>? _schemaSnapshot;
 
+    // 錯誤分類（OnInitializedAsync 載 _run 後填）— 給 header badge 用
+    private EtlTool.Core.Engine.EngineErrorClassifier.Classification? _classification;
+
+    private string ErrorBadgeBg() => _classification?.Class switch
+    {
+        EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Transient => "bg-warning text-dark",
+        EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Permanent => "bg-danger",
+        _ => "bg-secondary",
+    };
+
+    private string ErrorBadgeIcon() => _classification?.Class switch
+    {
+        EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Transient => "🔁",
+        EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Permanent => "🛑",
+        _ => "❓",
+    };
+
     // Parsed sample payload metadata (populated in OnInitializedAsync after _run loaded).
     // SamplePayloadJson 在 EtlEngine 端有兩種格式：
     //   - 舊／無遮罩：純 JSON array of row objects
@@ -289,6 +331,12 @@ else
         _run = await RunRepo.GetAsync(Id, ct);
         if (_run is null) return;
         ParseSamplePayload();
+
+        if (!string.IsNullOrEmpty(_run.ErrorMessage))
+        {
+            _classification = EtlTool.Core.Engine.EngineErrorClassifier.Classify(
+                new Exception(_run.ErrorMessage));
+        }
 
         var t = await TaskRepo.GetWithMappingsAsync(_run.EtlTaskId, ct);
         _taskName = t?.Name;
