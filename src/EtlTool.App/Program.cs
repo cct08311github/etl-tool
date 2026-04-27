@@ -99,6 +99,8 @@ builder.Services.AddScoped<RunHistoryRepository>();
 builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<ApprovalRepository>();
 builder.Services.AddScoped<EntityChangeHistoryRepository>();
+builder.Services.AddScoped<MaintenanceWindowRepository>();
+builder.Services.AddScoped<IMaintenanceWindowProvider>(sp => sp.GetRequiredService<MaintenanceWindowRepository>());
 builder.Services.AddScoped<AuditQueryRepository>();
 builder.Services.AddScoped<AuditChainVerifier>();
 builder.Services.AddSingleton<IAuditLogger, AuditLogger>();
@@ -150,6 +152,7 @@ builder.Services.AddHostedService<ConnectionHealthMonitor>();
 builder.Services.AddHostedService<MetricsScraperService>();
 builder.Services.AddHostedService<ApprovalExpirySweepService>();
 builder.Services.AddHostedService<LongRunningJobWatchdog>();
+builder.Services.AddHostedService<NightlyBackupService>();
 
 // Authentication / Authorization
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));

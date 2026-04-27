@@ -17,6 +17,7 @@ public sealed class EtlJob : IJob
     private readonly ILogger<EtlJob> _log;
     private readonly SchedulerKillSwitch? _killSwitch;
     private readonly IOptionsMonitor<MaintenanceWindowsOptions>? _maintenance;
+    private readonly IMaintenanceWindowProvider? _maintenanceProvider;
     private readonly IAuditLogger? _audit;
     private readonly ICircuitBreakerEnforcer? _circuitBreaker;
 
@@ -24,6 +25,7 @@ public sealed class EtlJob : IJob
         EtlEngine engine, IEtlTaskLookup taskLookup, ILogger<EtlJob> log,
         SchedulerKillSwitch? killSwitch = null,
         IOptionsMonitor<MaintenanceWindowsOptions>? maintenance = null,
+        IMaintenanceWindowProvider? maintenanceProvider = null,
         IAuditLogger? audit = null,
         ICircuitBreakerEnforcer? circuitBreaker = null)
     {
@@ -32,6 +34,7 @@ public sealed class EtlJob : IJob
         _log = log;
         _killSwitch = killSwitch;
         _maintenance = maintenance;
+        _maintenanceProvider = maintenanceProvider;
         _audit = audit;
         _circuitBreaker = circuitBreaker;
     }
@@ -75,9 +78,16 @@ public sealed class EtlJob : IJob
         }
 
         // 銀行控制 2：維護視窗（手動觸發例外允許）
-        if (_maintenance is not null && triggerType == TriggerType.Scheduled)
+        // 優先用 IMaintenanceWindowProvider（可合併 DB + appsettings 來源）；
+        // 沒注入則退化到舊的 IOptionsMonitor 直接查 appsettings — 保留向後相容。
+        if (triggerType == TriggerType.Scheduled)
         {
-            var active = _maintenance.CurrentValue.CurrentlyActive(DateTime.Now);
+            MaintenanceWindow? active = null;
+            if (_maintenanceProvider is not null)
+                active = await _maintenanceProvider.CurrentlyActiveAsync(DateTime.Now, context.CancellationToken);
+            else if (_maintenance is not null)
+                active = _maintenance.CurrentValue.CurrentlyActive(DateTime.Now);
+
             if (active is not null)
             {
                 _log.LogInformation("Skipping {TaskName} — within maintenance window: {Reason}",

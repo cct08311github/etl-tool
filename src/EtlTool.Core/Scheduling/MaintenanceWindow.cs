@@ -74,3 +74,26 @@ public sealed class MaintenanceWindowsOptions
     public MaintenanceWindow? CurrentlyActive(DateTime localNow)
         => Windows.FirstOrDefault(w => w.IsActive(localNow));
 }
+
+/// <summary>
+/// 統一介面：把 appsettings (MaintenanceWindowsOptions) + DB 來源合併。
+/// EtlJob 透過此介面查詢，不必知道實際資料來源。
+/// </summary>
+public interface IMaintenanceWindowProvider
+{
+    /// <summary>合併所有來源；回傳第一個 active window，沒有 → null。</summary>
+    Task<MaintenanceWindow?> CurrentlyActiveAsync(DateTime localNow, CancellationToken ct);
+
+    /// <summary>給 admin UI 列出所有來源（appsettings + DB）。</summary>
+    Task<IReadOnlyList<MergedMaintenanceWindow>> ListAllAsync(CancellationToken ct);
+}
+
+/// <summary>給 admin /system 顯示用：標明來源 (appsettings vs DB)。</summary>
+public sealed record MergedMaintenanceWindow(
+    Guid? DbId,                         // null = appsettings 來源
+    string Source,                      // "appsettings" 或 "database"
+    string[] Days,
+    string From,
+    string To,
+    string? Reason,
+    bool Enabled);

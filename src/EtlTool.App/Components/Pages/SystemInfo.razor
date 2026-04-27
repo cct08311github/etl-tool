@@ -11,6 +11,7 @@
 @inject EtlTool.Core.Engine.IAuditLogger AuditLogger
 @inject AuthenticationStateProvider AuthStateProvider
 @inject Microsoft.Extensions.Options.IOptionsMonitor<EtlTool.Core.Scheduling.MaintenanceWindowsOptions> MaintOpts
+@inject EtlTool.Data.Repositories.MaintenanceWindowRepository MaintRepo
 
 <PageTitle>系統資訊</PageTitle>
 
@@ -181,63 +182,147 @@ else
     </div>
 
     <div class="card mb-3">
-        <div class="card-header">維護視窗 (Maintenance Windows)</div>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>維護視窗 (Maintenance Windows)</span>
+            <button class="btn btn-sm btn-primary" @onclick="OpenAddWindow">
+                <Icon Name="plus" /> 新增 (DB)
+            </button>
+        </div>
         @{
-            var maintOpts = MaintOpts.CurrentValue;
             var nowLocal = DateTime.Now;
-            var activeNow = maintOpts.CurrentlyActive(nowLocal);
         }
-        @if (activeNow is not null)
+        @if (_maintenanceMerged is null)
         {
-            <div class="alert alert-warning m-3 mb-0 small">
-                <strong>⏸ 目前正在維護視窗中</strong> — @(activeNow.Reason ?? "(未提供原因)")，
-                所有排程觸發的 ETL 都會 skip；手動觸發仍允許。
-            </div>
-        }
-        @if (maintOpts.Windows.Count == 0)
-        {
-            <div class="card-body small text-muted">
-                未設定任何維護視窗（Maintenance:Windows 為空）。
-                如需設定，編輯 appsettings.json 後重啟（IOptionsMonitor 也支援 file watch 熱載）。
-            </div>
+            <div class="card-body small text-muted">載入中…</div>
         }
         else
         {
-            <table class="table mb-0 align-middle">
-                <thead>
-                    <tr>
-                        <th style="width: 25%">天</th>
-                        <th style="width: 12%">起</th>
-                        <th style="width: 12%">迄</th>
-                        <th>原因</th>
-                        <th style="width: 12%">目前狀態</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var w in maintOpts.Windows)
-                    {
-                        var isActive = w.IsActive(nowLocal);
+            @if (_currentlyActive is not null)
+            {
+                <div class="alert alert-warning m-3 mb-0 small">
+                    <strong>⏸ 目前正在維護視窗中</strong> —
+                    @(_currentlyActive.Reason ?? "(未提供原因)")
+                    @(" / " + _currentlyActive.From + "-" + _currentlyActive.To),
+                    所有排程觸發的 ETL 都會 skip；手動觸發仍允許。
+                </div>
+            }
+
+            @if (_maintenanceMerged.Count == 0)
+            {
+                <div class="card-body small text-muted">
+                    未設定任何維護視窗。可從上方「新增 (DB)」按鈕加入；或在 appsettings 配置 <code>Maintenance:Windows</code> 後重啟。
+                </div>
+            }
+            else
+            {
+                <table class="table mb-0 align-middle">
+                    <thead>
                         <tr>
-                            <td><code class="small">@(w.Days.Length == 0 ? "(空)" : string.Join(", ", w.Days))</code></td>
-                            <td><code>@w.From</code></td>
-                            <td><code>@w.To</code></td>
-                            <td class="small">@(w.Reason ?? "—")</td>
+                            <th style="width: 110px">來源</th>
+                            <th>天</th>
+                            <th style="width: 80px">起</th>
+                            <th style="width: 80px">迄</th>
+                            <th>原因</th>
+                            <th style="width: 100px">狀態</th>
+                            <th style="width: 120px" class="text-end">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var m in _maintenanceMerged)
+                    {
+                        <tr>
                             <td>
-                                @if (isActive)
+                                <span class="badge @(m.Source == "appsettings" ? "bg-secondary" : "bg-primary")">@m.Source</span>
+                            </td>
+                            <td><code class="small">@(m.Days.Length == 0 ? "(空)" : string.Join(", ", m.Days))</code></td>
+                            <td><code>@m.From</code></td>
+                            <td><code>@m.To</code></td>
+                            <td class="small">@(m.Reason ?? "—")</td>
+                            <td>
+                                @if (!m.Enabled)
                                 {
-                                    <span class="badge bg-warning text-dark">⏸ 進行中</span>
+                                    <span class="badge bg-light text-dark">已停用</span>
                                 }
                                 else
                                 {
-                                    <span class="badge bg-light text-dark">未啟動</span>
+                                    var mw = new EtlTool.Core.Scheduling.MaintenanceWindow
+                                    {
+                                        Days = m.Days, From = m.From, To = m.To, Reason = m.Reason,
+                                    };
+                                    if (mw.IsActive(nowLocal))
+                                    {
+                                        <span class="badge bg-warning text-dark">⏸ 進行中</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-success">啟用</span>
+                                    }
+                                }
+                            </td>
+                            <td class="text-end">
+                                @if (m.DbId is not null)
+                                {
+                                    <button class="btn btn-sm btn-link p-0 me-2" @onclick="() => OpenEditWindow(m)">編輯</button>
+                                    <button class="btn btn-sm btn-link p-0 text-danger" @onclick="() => DeleteWindow(m.DbId.Value)">刪除</button>
+                                }
+                                else
+                                {
+                                    <span class="small text-muted">(appsettings)</span>
                                 }
                             </td>
                         </tr>
                     }
-                </tbody>
-            </table>
+                    </tbody>
+                </table>
+            }
         }
     </div>
+
+    @if (_showWindowEdit)
+    {
+        <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">@(_editing.Id == Guid.Empty ? "新增維護視窗" : "編輯維護視窗")</h5>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-2">
+                            <label class="form-label">天 (例：All / Mon,Tue,Wed,Thu,Fri / Sat,Sun)</label>
+                            <input class="form-control" @bind="_editing.Days" placeholder="All" />
+                            <small class="text-muted">逗號分隔；"All" = 每天；其他用 Mon/Tue/.../Sun 三字母縮寫。</small>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label class="form-label">起 (HH:mm)</label>
+                                <input class="form-control" @bind="_editing.From" placeholder="02:00" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">迄 (HH:mm)</label>
+                                <input class="form-control" @bind="_editing.To" placeholder="04:00" />
+                            </div>
+                        </div>
+                        <div class="mb-2 mt-2">
+                            <label class="form-label">原因 (audit / UI 提示)</label>
+                            <input class="form-control" @bind="_editing.Reason" placeholder="夜間備份 / DB 維護" />
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" @bind="_editing.Enabled" />
+                            <label class="form-check-label">啟用此視窗</label>
+                        </div>
+                        @if (_windowEditError is not null)
+                        {
+                            <div class="alert alert-danger mt-2 mb-0 small">@_windowEditError</div>
+                        }
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" @onclick="() => _showWindowEdit = false" disabled="@_windowBusy">取消</button>
+                        <button class="btn btn-primary" @onclick="SaveWindow" disabled="@_windowBusy">儲存</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
 
     <div class="alert alert-info small mb-0">
         提示：本頁僅顯示靜態組態與計數。即時排程器狀態請見 <a href="/scheduler">/scheduler</a>；
@@ -268,6 +353,93 @@ else
     private string? _chainHeadHash;
     private string? _chainTailHash;
     private List<EtlTool.Core.Models.EtlTask>? _autoDisabled;
+
+    private IReadOnlyList<EtlTool.Core.Scheduling.MergedMaintenanceWindow>? _maintenanceMerged;
+    private EtlTool.Core.Scheduling.MaintenanceWindow? _currentlyActive;
+    private bool _showWindowEdit;
+    private EtlTool.Core.Models.MaintenanceWindowEntity _editing = new();
+    private string? _windowEditError;
+    private bool _windowBusy;
+
+    private async Task LoadMaintenanceAsync(CancellationToken ct)
+    {
+        _maintenanceMerged = await MaintRepo.ListAllAsync(ct);
+        _currentlyActive = await MaintRepo.CurrentlyActiveAsync(DateTime.Now, ct);
+    }
+
+    private void OpenAddWindow()
+    {
+        _editing = new EtlTool.Core.Models.MaintenanceWindowEntity
+        {
+            Id = Guid.Empty,  // 用 Empty 標示「新增」
+            Days = "All",
+            From = "02:00",
+            To = "04:00",
+            Enabled = true,
+        };
+        _windowEditError = null;
+        _showWindowEdit = true;
+    }
+
+    private void OpenEditWindow(EtlTool.Core.Scheduling.MergedMaintenanceWindow m)
+    {
+        if (m.DbId is null) return;
+        _editing = new EtlTool.Core.Models.MaintenanceWindowEntity
+        {
+            Id = m.DbId.Value,
+            Days = string.Join(",", m.Days),
+            From = m.From,
+            To = m.To,
+            Reason = m.Reason,
+            Enabled = m.Enabled,
+        };
+        _windowEditError = null;
+        _showWindowEdit = true;
+    }
+
+    private async Task SaveWindow()
+    {
+        _windowEditError = null;
+        if (string.IsNullOrWhiteSpace(_editing.Days)) { _windowEditError = "Days 必填（如 All）"; return; }
+        if (!System.Text.RegularExpressions.Regex.IsMatch(_editing.From ?? "", @"^\d{2}:\d{2}$"))
+        { _windowEditError = "From 必須是 HH:mm 格式"; return; }
+        if (!System.Text.RegularExpressions.Regex.IsMatch(_editing.To ?? "", @"^\d{2}:\d{2}$"))
+        { _windowEditError = "To 必須是 HH:mm 格式"; return; }
+
+        _windowBusy = true;
+        try
+        {
+            var state = await AuthStateProvider.GetAuthenticationStateAsync();
+            var actor = state.User.Identity?.Name;
+            if (_editing.Id == Guid.Empty)
+            {
+                _editing.Id = Guid.NewGuid();
+                await MaintRepo.CreateAsync(_editing, actor, CancellationToken.None);
+            }
+            else
+            {
+                await MaintRepo.UpdateAsync(_editing, actor, CancellationToken.None);
+            }
+            _showWindowEdit = false;
+            await LoadMaintenanceAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _windowEditError = ex.Message;
+        }
+        finally
+        {
+            _windowBusy = false;
+        }
+    }
+
+    private async Task DeleteWindow(Guid id)
+    {
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        var actor = state.User.Identity?.Name;
+        await MaintRepo.DeleteAsync(id, actor, CancellationToken.None);
+        await LoadMaintenanceAsync(CancellationToken.None);
+    }
 
     private record WebhookTestResult(bool Ok, int? StatusCode, string? Error);
     private WebhookTestResult? _webhookTestResult;
@@ -379,6 +551,9 @@ else
                 .Where(t => t.AutoDisabledAt != null)
                 .OrderByDescending(t => t.AutoDisabledAt)
                 .ToListAsync();
+
+            // Maintenance windows (merged DB + appsettings)
+            await LoadMaintenanceAsync(CancellationToken.None);
         }
         finally
         {

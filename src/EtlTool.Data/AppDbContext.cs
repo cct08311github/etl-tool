@@ -16,6 +16,7 @@ public class AppDbContext : DbContext
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<EntityChangeHistory> EntityChangeHistories => Set<EntityChangeHistory>();
     public DbSet<PasswordHistory> PasswordHistories => Set<PasswordHistory>();
+    public DbSet<MaintenanceWindowEntity> MaintenanceWindows => Set<MaintenanceWindowEntity>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -99,6 +100,16 @@ public class AppDbContext : DbContext
             e.HasKey(x => x.Id);
             e.Property(x => x.PasswordHash).HasMaxLength(200).IsRequired();
             e.HasIndex(x => new { x.UserId, x.CreatedAt });
+        });
+
+        b.Entity<MaintenanceWindowEntity>(e =>
+        {
+            e.ToTable("MaintenanceWindows");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Days).HasMaxLength(100).IsRequired();
+            e.Property(x => x.From).HasMaxLength(5).IsRequired();
+            e.Property(x => x.To).HasMaxLength(5).IsRequired();
+            e.Property(x => x.Reason).HasMaxLength(500);
         });
 
         b.Entity<ApprovalRequest>(e =>
