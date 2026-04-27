@@ -95,6 +95,31 @@ public sealed class SchedulerService
                 severity: AuditSeverity.Info, actor: actor ?? "system", ct: ct);
     }
 
+    /// <summary>
+    /// 中止正在執行的 job — 透過 Quartz scheduler.Interrupt(jobKey)，
+    /// 會把 CancellationToken 設為 cancelled，EtlEngine 內部 ct.ThrowIfCancellationRequested
+    /// 會在下一個 await 點生效，run 會以 Failed + "operation cancelled" 結束（transaction rollback）。
+    /// 對 SqlBulkCopy 那種長時間單一語句不一定立刻生效，但 streaming read 路徑會在下一個 ReadAsync 取消。
+    /// </summary>
+    public async Task<bool> InterruptJobAsync(Guid taskId, string? actor, CancellationToken ct)
+    {
+        var scheduler = await _schedulerFactory.GetScheduler(ct);
+        var jobKey = JobKeyFor(taskId);
+        var interrupted = await scheduler.Interrupt(jobKey, ct);
+        if (_audit is not null)
+        {
+            var task = await _lookup.GetWithMappingsAsync(taskId, ct);
+            await _audit.LogAsync(AuditCategory.Scheduler, AuditAction.Update,
+                interrupted
+                    ? $"⛔ 中止執行中的任務「{task?.Name ?? taskId.ToString()}」"
+                    : $"⚠ 中止任務「{task?.Name ?? taskId.ToString()}」失敗（job 不在執行中？）",
+                targetType: nameof(EtlTask), targetId: taskId, targetName: task?.Name,
+                severity: interrupted ? AuditSeverity.Warning : AuditSeverity.Info,
+                actor: actor ?? "system", ct: ct);
+        }
+        return interrupted;
+    }
+
     public async Task TriggerNowAsync(Guid taskId, CancellationToken ct)
     {
         var scheduler = await _schedulerFactory.GetScheduler(ct);

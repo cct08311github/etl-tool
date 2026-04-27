@@ -12,16 +12,57 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">連線管理</h1>
-    <AuthorizeView Roles="Admin,Operator">
-        <Authorized>
-            <a class="btn btn-primary" href="connections/new"><Icon Name="plus" />新增連線</a>
-        </Authorized>
-    </AuthorizeView>
+    <div class="d-flex gap-2">
+        <AuthorizeView Roles="Admin">
+            <Authorized>
+                <button class="btn btn-outline-primary" @onclick="TestAllConnections" disabled="@_bulkTesting">
+                    @if (_bulkTesting) { <Icon Name="loader" /> <span>測試中…</span> }
+                    else { <Icon Name="check-circle" /> <span>測試全部連線</span> }
+                </button>
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Roles="Admin,Operator">
+            <Authorized>
+                <a class="btn btn-primary" href="connections/new"><Icon Name="plus" />新增連線</a>
+            </Authorized>
+        </AuthorizeView>
+    </div>
 </div>
 
 @if (_message is not null)
 {
     <div class="alert @(_isError ? "alert-danger" : "alert-info")">@_message</div>
+}
+
+@if (_bulkResult is not null && _bulkResult.Count > 0)
+{
+    <div class="card mb-3">
+        <div class="card-header">批次測試結果</div>
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr><th>連線</th><th style="width:90px">結果</th><th>細節</th></tr>
+            </thead>
+            <tbody>
+            @foreach (var r in _bulkResult)
+            {
+                <tr>
+                    <td><code>@r.Name</code></td>
+                    <td>
+                        @if (r.Ok)
+                        {
+                            <span class="badge bg-success">✓ 通過</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-danger">⚠ 失敗</span>
+                        }
+                    </td>
+                    <td class="small text-muted">@(r.Detail ?? "—")</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
 }
 
 @if (_items is null)
@@ -176,6 +217,58 @@ else
     private string? _modalError;
 
     private Guid? _testingId;
+    private bool _bulkTesting;
+    private List<(string Name, bool Ok, string? Detail)>? _bulkResult;
+
+    private async Task TestAllConnections()
+    {
+        if (_items is null || _currentUsername is null) return;
+        _bulkTesting = true;
+        _bulkResult = new();
+        StateHasChanged();
+        try
+        {
+            // 平行測試（避免 N 個慢連線 × 5 秒 timeout 線性等下去）
+            var ct = CancellationToken.None;
+            var tasks = _items.Select(async c =>
+            {
+                try
+                {
+                    var plain = await ConnRepo.GetPlainConnectionStringAsync(c.Id, Protector, ct);
+                    var connector = ConnectorFactory.Create(c.ProviderType, plain);
+                    var ok = await connector.TestConnectionAsync(ct);
+                    return (c.Name, ok, ok ? null : (string?)"連線失敗");
+                }
+                catch (Exception ex)
+                {
+                    return (c.Name, false, (string?)ex.Message);
+                }
+            }).ToList();
+            var results = await Task.WhenAll(tasks);
+            _bulkResult = results.ToList();
+
+            var successCount = _bulkResult.Count(r => r.Ok);
+            var failCount = _bulkResult.Count - successCount;
+            var msg = $"批次測試完成：{successCount} 成功 / {failCount} 失敗";
+            _isError = failCount > 0;
+            _message = msg;
+
+            await AuditLogger.LogAsync(
+                EtlTool.Core.Models.AuditCategory.Connection,
+                EtlTool.Core.Models.AuditAction.Update,
+                $"{(failCount == 0 ? "✓" : "⚠")} 批次測試所有連線：{successCount}/{_bulkResult.Count} 成功" +
+                (failCount > 0 ? $"，失敗：{string.Join(", ", _bulkResult.Where(r => !r.Ok).Take(5).Select(r => r.Name))}" : ""),
+                severity: failCount > 0 ? EtlTool.Core.Models.AuditSeverity.Warning : EtlTool.Core.Models.AuditSeverity.Info,
+                actor: _currentUsername,
+                ct: ct);
+
+            await Reload();
+        }
+        finally
+        {
+            _bulkTesting = false;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {

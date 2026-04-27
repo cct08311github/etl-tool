@@ -64,20 +64,37 @@ else
                 <thead>
                     <tr>
                         <th>Job</th>
+                        <th>對應任務</th>
                         <th>觸發時間</th>
                         <th>已執行</th>
+                        <th class="text-end">操作</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach (var c in _inspection.CurrentlyExecuting)
                     {
+                        // 從 JobName 解析 taskId（格式 "etl_<guid>"）
+                        var taskId = ParseTaskId(c.JobName);
+                        var taskName = taskId is not null && _taskNames.TryGetValue(taskId.Value, out var tn) ? tn : null;
                         <tr>
                             <td><code>@c.JobGroup.@c.JobName</code></td>
+                            <td>@(taskName ?? "—")</td>
                             <td class="small text-muted">@c.FireTimeUtc.ToLocalTime():HH:mm:ss</td>
                             <td class="small">
                                 <span class="badge @(c.RunMs > 60_000 ? "bg-warning text-dark" : "bg-success")">
                                     @FormatMs(c.RunMs)
                                 </span>
+                            </td>
+                            <td class="text-end">
+                                @if (taskId is not null)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            @onclick="() => InterruptJob(taskId.Value)"
+                                            disabled="@_busy"
+                                            title="送 cancel signal 給此 job — 在下一個 await 點生效，run 以 Failed 結束、transaction rollback">
+                                        <Icon Name="x" /> 中止
+                                    </button>
+                                }
                             </td>
                         </tr>
                     }
@@ -193,6 +210,25 @@ else
             await Refresh();
         }
         finally { _busy = false; }
+    }
+
+    private async Task InterruptJob(Guid taskId)
+    {
+        _busy = true;
+        try
+        {
+            await Scheduler.InterruptJobAsync(taskId, _currentUsername, CancellationToken.None);
+            await Refresh();
+        }
+        finally { _busy = false; }
+    }
+
+    /// <summary>EtlJob's JobKey name 是 "etl_{guid}"。從 name 解析回 task id。</summary>
+    private static Guid? ParseTaskId(string jobName)
+    {
+        const string prefix = "etl_";
+        if (!jobName.StartsWith(prefix, StringComparison.Ordinal)) return null;
+        return Guid.TryParse(jobName[prefix.Length..], out var g) ? g : null;
     }
 
     private async Task Refresh()
