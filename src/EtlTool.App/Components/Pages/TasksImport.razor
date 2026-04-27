@@ -49,15 +49,21 @@
         <label class="form-label">CSV 內容 (貼上或上傳)</label>
         <InputFile OnChange="OnFilePicked" accept=".csv,.txt" class="form-control mb-2" />
         <textarea class="form-control font-monospace" rows="8" @bind="_csvText" placeholder="@_placeholder"></textarea>
-        <div class="d-flex gap-2 mt-2">
+        <div class="d-flex gap-3 mt-2 align-items-center">
             <button class="btn btn-primary" @onclick="DryRun" disabled="@_busy">
                 @if (_busy) { <Icon Name="loader" /> <span>處理中…</span> }
                 else { <span>👀 預覽</span> }
             </button>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="upsert" @bind="_updateMode" />
+                <label class="form-check-label small" for="upsert">
+                    Upsert 模式（同名任務更新而非報錯）
+                </label>
+            </div>
             @if (_parsed is not null && _parsed.OkCount > 0)
             {
                 <button class="btn btn-success" @onclick="Commit" disabled="@_busy">
-                    💾 確認匯入 (@_parsed.OkCount 個任務)
+                    💾 確認 (@_parsed.OkCount @(_updateMode ? "建立或更新" : "建立"))
                 </button>
             }
         </div>
@@ -123,6 +129,7 @@
     private bool _busy;
     private string? _message;
     private bool _isError;
+    private bool _updateMode;
 
     private string _placeholder = "name,source_connection,source_schema,source_table,target_connection,target_schema,target_table,write_mode,cron,enabled,tags\n" +
         "OrdersDaily,prod-mssql,dbo,Orders_SRC,prod-oracle,HR,Orders_TGT,DeleteInsert,0 0 2 * * ?,true,\"daily,critical\"";
@@ -163,11 +170,18 @@
             var conns = await ConnRepo.ListAsync(ct);
             var connByName = conns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
 
+            // Upsert mode: index existing tasks by name
+            Dictionary<string, EtlTool.Core.Models.EtlTask> existingByName = new(StringComparer.OrdinalIgnoreCase);
+            if (_updateMode)
+            {
+                var allTasks = await TaskRepo.ListLightweightAsync(ct);
+                foreach (var t in allTasks) existingByName[t.Name] = t;
+            }
+
             var state = await AuthState.GetAuthenticationStateAsync();
             var actor = state.User.Identity?.Name;
 
-            int created = 0;
-            int failed = 0;
+            int created = 0, updated = 0, failed = 0;
             var failures = new List<string>();
             foreach (var r in _parsed.Rows.Where(r => r.Ok))
             {
@@ -186,10 +200,36 @@
 
                 try
                 {
-                    var task = EtlTool.Core.Engine.TaskCsvImporter.ToEtlTask(r, sourceConn.Id, targetConn.Id);
-                    var saved = await TaskRepo.CreateAsync(task, ct, actor: actor);
-                    await Scheduler.RescheduleAsync(saved.Id, ct);
-                    created++;
+                    if (_updateMode && existingByName.TryGetValue(r.Name, out var existing))
+                    {
+                        var full = await TaskRepo.GetWithMappingsAsync(existing.Id, ct);
+                        if (full is null)
+                        {
+                            failed++;
+                            failures.Add($"row {r.LineNumber} ({r.Name}): existing task disappeared");
+                            continue;
+                        }
+                        full.SourceConnectionId = sourceConn.Id;
+                        full.SourceSchema = r.SourceSchema;
+                        full.SourceTable = r.SourceTable;
+                        full.TargetConnectionId = targetConn.Id;
+                        full.TargetSchema = r.TargetSchema;
+                        full.TargetTable = r.TargetTable;
+                        full.WriteMode = r.WriteMode;
+                        full.CronExpression = r.CronExpression;
+                        full.Enabled = r.Enabled;
+                        full.Tags = r.Tags;
+                        var saved = await TaskRepo.UpdateAsync(full, ct, actor: actor);
+                        await Scheduler.RescheduleAsync(saved.Id, ct);
+                        updated++;
+                    }
+                    else
+                    {
+                        var task = EtlTool.Core.Engine.TaskCsvImporter.ToEtlTask(r, sourceConn.Id, targetConn.Id);
+                        var saved = await TaskRepo.CreateAsync(task, ct, actor: actor);
+                        await Scheduler.RescheduleAsync(saved.Id, ct);
+                        created++;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -199,9 +239,9 @@
             }
 
             _isError = failed > 0;
-            _message = $"匯入完成：建立 {created} 個任務" +
+            _message = $"匯入完成：建立 {created}" + (updated > 0 ? $"、更新 {updated}" : "") +
                 (failed > 0 ? $"，{failed} 失敗：{string.Join("; ", failures.Take(5))}" : "");
-            _parsed = null;  // 清掉預覽，避免重複按
+            _parsed = null;
             _csvText = "";
         }
         finally

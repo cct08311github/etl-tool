@@ -162,6 +162,10 @@ else
                                     else { <Icon Name="check-circle" /> }
                                 </button>
                                 <a class="icon-btn" title="編輯" href="@($"connections/{c.Id}")"><Icon Name="edit" /></a>
+                                <button class="icon-btn" title="複製為新連線（dev↔prod 同一機房常見場景）"
+                                        @onclick="() => OpenClone(c)">
+                                    <Icon Name="copy" />
+                                </button>
                                 <a class="icon-btn" title="變更歷史" href="@($"connections/{c.Id}/history")"><Icon Name="history" /></a>
                                 <button class="icon-btn icon-btn-danger" title="送交覆核刪除"
                                         @onclick="() => OpenSubmit(c)"
@@ -176,6 +180,33 @@ else
         }
         </tbody>
     </table>
+    </div>
+}
+
+@if (_showClone && _cloneSource is not null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">複製連線：@_cloneSource.Name</h5></div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        以現有連線為範本建立新連線，同一連線字串、同樣 provider。
+                        新連線名稱必須唯一。建立後可至「編輯」頁面修改 host / 帳密 / DB。
+                    </p>
+                    <label class="form-label">新連線名稱</label>
+                    <input class="form-control" @bind="_cloneName" placeholder="例：@(_cloneSource.Name)-staging" />
+                    @if (_cloneError is not null)
+                    {
+                        <div class="alert alert-danger mt-2 small">@_cloneError</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showClone = false" disabled="@_cloneBusy">取消</button>
+                    <button class="btn btn-primary" @onclick="ConfirmClone" disabled="@_cloneBusy">建立副本</button>
+                </div>
+            </div>
+        </div>
     </div>
 }
 
@@ -222,6 +253,51 @@ else
     private Guid? _testingId;
     private bool _bulkTesting;
     private List<(string Name, bool Ok, string? Detail)>? _bulkResult;
+
+    private bool _showClone;
+    private bool _cloneBusy;
+    private EtlTool.Core.Models.ConnectionDefinition? _cloneSource;
+    private string _cloneName = "";
+    private string? _cloneError;
+
+    private void OpenClone(EtlTool.Core.Models.ConnectionDefinition c)
+    {
+        _cloneSource = c;
+        _cloneName = c.Name + "-copy";
+        _cloneError = null;
+        _showClone = true;
+    }
+
+    private async Task ConfirmClone()
+    {
+        if (_cloneSource is null) return;
+        if (string.IsNullOrWhiteSpace(_cloneName)) { _cloneError = "新名稱必填"; return; }
+        if (_items?.Any(c => string.Equals(c.Name, _cloneName.Trim(), StringComparison.OrdinalIgnoreCase)) == true)
+        {
+            _cloneError = "名稱已被使用";
+            return;
+        }
+        _cloneBusy = true;
+        try
+        {
+            var ct = CancellationToken.None;
+            // Decrypt source CS, re-create new connection with same plaintext (will be re-encrypted under new key etc.)
+            var plain = await ConnRepo.GetPlainConnectionStringAsync(_cloneSource.Id, Protector, ct);
+            await ConnRepo.CreateAsync(_cloneName.Trim(), _cloneSource.ProviderType, plain, Protector, ct, actor: _currentUsername);
+            _showClone = false;
+            _isError = false;
+            _message = $"已複製連線「{_cloneSource.Name}」為「{_cloneName}」。建議至編輯頁修改帳密為環境專屬值。";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _cloneError = ex.Message;
+        }
+        finally
+        {
+            _cloneBusy = false;
+        }
+    }
 
     private async Task TestAllConnections()
     {

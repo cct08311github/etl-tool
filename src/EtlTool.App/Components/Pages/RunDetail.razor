@@ -4,6 +4,7 @@
 @inject EtlTool.Data.Repositories.RunHistoryRepository RunRepo
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
 @inject EtlTool.Data.AppDbContext Db
+@inject EtlTool.Core.Scheduling.SchedulerService Scheduler
 
 <PageTitle>執行詳情</PageTitle>
 
@@ -13,8 +14,25 @@
 }
 else
 {
-    <h1>執行詳情</h1>
-    <a class="btn btn-link" href="@($"tasks/{_run.EtlTaskId}/runs")">← 返回此任務歷史</a>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="m-0">執行詳情</h1>
+        <div class="d-flex gap-2">
+            <AuthorizeView Roles="Admin,Operator">
+                <Authorized>
+                    <button class="btn btn-outline-success btn-sm" @onclick="Rerun" disabled="@_rerunBusy"
+                            title="再跑一次此 task（手動觸發；繞過 maintenance window 與 dependency check）">
+                        @if (_rerunBusy) { <Icon Name="loader" /> } else { <Icon Name="play" /> }
+                        <span class="ms-1">再跑一次</span>
+                    </button>
+                </Authorized>
+            </AuthorizeView>
+            <a class="btn btn-link btn-sm" href="@($"tasks/{_run.EtlTaskId}/runs")">← 返回此任務歷史</a>
+        </div>
+    </div>
+    @if (_rerunMessage is not null)
+    {
+        <div class="alert @(_rerunError ? "alert-danger" : "alert-success") small">@_rerunMessage</div>
+    }
 
     <div class="card mb-3">
         <div class="card-body">
@@ -172,6 +190,31 @@ else
     [Parameter] public Guid Id { get; set; }
     private EtlTool.Core.Models.RunHistory? _run;
     private string? _taskName;
+    private bool _rerunBusy;
+    private string? _rerunMessage;
+    private bool _rerunError;
+
+    private async Task Rerun()
+    {
+        if (_run is null) return;
+        _rerunBusy = true;
+        _rerunMessage = null;
+        try
+        {
+            await Scheduler.TriggerNowAsync(_run.EtlTaskId, CancellationToken.None);
+            _rerunError = false;
+            _rerunMessage = $"已觸發手動執行任務「{_taskName ?? _run.EtlTaskId.ToString()}」。可至執行歷史查看新一筆 run。";
+        }
+        catch (Exception ex)
+        {
+            _rerunError = true;
+            _rerunMessage = $"觸發失敗：{ex.Message}";
+        }
+        finally
+        {
+            _rerunBusy = false;
+        }
+    }
     private List<EtlTool.Core.Models.AuditEvent>? _relatedAudits;
     private List<EtlTool.Core.Models.ColumnInfo>? _schemaSnapshot;
 
