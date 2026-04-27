@@ -164,6 +164,7 @@ else
                 <th>下次執行</th>
                 <th>上次成功</th>
                 <th>上次失敗</th>
+                <th>SLA (30d)</th>
                 <th>啟用</th>
                 <th class="text-end">操作</th>
             </tr>
@@ -174,6 +175,10 @@ else
             <tr>
                 <td>
                     <a href="@($"tasks/{t.Id}")" class="fw-medium">@t.Name</a>
+                    @if (!string.IsNullOrEmpty(t.Notes))
+                    {
+                        <span class="badge bg-light text-dark ms-2 border" title="@t.Notes" style="cursor:help">📝</span>
+                    }
                     @if (_pendingTargets.Contains(t.Id))
                     {
                         <span class="badge bg-warning text-dark ms-2" title="此任務已有待覆核的刪除請求">待覆核刪除</span>
@@ -220,6 +225,18 @@ else
                     else
                     {
                         <span class="text-muted">尚未成功</span>
+                    }
+                </td>
+                <td class="small">
+                    @if (_sla.TryGetValue(t.Id, out var stats) && stats.Total > 0)
+                    {
+                        var pct = stats.Success * 100.0 / stats.Total;
+                        var cls = pct >= 99 ? "bg-success" : pct >= 95 ? "bg-warning text-dark" : "bg-danger";
+                        <span class="badge @cls" title="@($"{stats.Success}/{stats.Total} 次成功（過去 30 天）")">@($"{pct:F0}%")</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
                     }
                 </td>
                 <td class="small">
@@ -318,6 +335,7 @@ else
     private Dictionary<Guid, DateTimeOffset?> _nextFire = new();
     private Dictionary<Guid, DateTime> _lastSuccess = new();
     private Dictionary<Guid, DateTime> _lastFailure = new();
+    private Dictionary<Guid, (int Success, int Total)> _sla = new();
     private HashSet<Guid> _pendingTargets = new();
     private Guid? _running;
     private string? _currentUsername;
@@ -356,6 +374,7 @@ else
         }
         _lastSuccess = await RunHistoryRepo.LastSuccessByTaskAsync(ct);
         _lastFailure = await RunHistoryRepo.LastFailureByTaskAsync(ct);
+        _sla = await RunHistoryRepo.SuccessRateByTaskAsync(TimeSpan.FromDays(30), ct);
         var pending = await ApprovalRepo.ListPendingAsync(ct);
         _pendingTargets = pending
             .Where(p => p.Action == ApprovalAction.DeleteTask)

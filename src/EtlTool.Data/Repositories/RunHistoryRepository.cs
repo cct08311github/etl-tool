@@ -81,6 +81,29 @@ public sealed class RunHistoryRepository : IRunHistorySink
         return grouped.ToDictionary(x => x.TaskId, x => x.LastAt);
     }
 
+    /// <summary>
+    /// 過去 N 天每個 task 的 (success_count, total_count)。
+    /// 用 GROUP BY 一次撈完，避免 N+1。total=0 的 task 不會出現在 dict 裡。
+    /// 計算 SLA：success / total（顯示用，呼叫端決定 threshold）。
+    /// </summary>
+    public async Task<Dictionary<Guid, (int Success, int Total)>> SuccessRateByTaskAsync(
+        TimeSpan window, CancellationToken ct)
+    {
+        var since = DateTime.UtcNow.Subtract(window);
+        var grouped = await _db.RunHistories
+            .AsNoTracking()
+            .Where(r => r.StartedAt >= since && r.Status != RunStatus.Running)
+            .GroupBy(r => r.EtlTaskId)
+            .Select(g => new
+            {
+                TaskId = g.Key,
+                Total = g.Count(),
+                Success = g.Count(r => r.Status == RunStatus.Success),
+            })
+            .ToListAsync(ct);
+        return grouped.ToDictionary(x => x.TaskId, x => (x.Success, x.Total));
+    }
+
     /// <summary>清理單一 task 超出保留筆數的舊紀錄。</summary>
     public async Task PurgeOldAsync(Guid taskId, CancellationToken ct)
     {

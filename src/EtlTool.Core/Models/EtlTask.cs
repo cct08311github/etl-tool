@@ -111,6 +111,13 @@ public class EtlTask
     /// <summary>auto-disable 的原因（人類可讀，含失敗次數與最後錯誤摘要）。</summary>
     public string? AutoDisabledReason { get; set; }
 
+    /// <summary>
+    /// Ops 交接 / 文件用的自由文字欄位（最大 2000 字）。
+    /// 範例：「業主：alice@bank；on-call：bob@bank；02-04 維護期間需先停 task。」
+    /// 顯示在 TaskEdit 表單與 Tasks list tooltip。不影響執行邏輯。
+    /// </summary>
+    public string? Notes { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

@@ -1,0 +1,248 @@
+@page "/tasks/{Id:guid}/schema-drift"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin,Operator")]
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory
+@inject EtlTool.Core.Connectors.IConnectionStringProtector Protector
+
+<PageTitle>Schema 漂移 — @(_task?.Name ?? "…")</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">Schema 漂移檢視 — @(_task?.Name ?? "…")</h1>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary btn-sm" @onclick="Reload" disabled="@_loading">
+            @if (_loading) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
+            <span class="ms-1">重新查 live schema</span>
+        </button>
+        <a class="btn btn-outline-secondary btn-sm" href="@($"tasks/{Id}")">← 返回任務</a>
+    </div>
+</div>
+
+@if (_task is null)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_snapshot is null || _snapshot.Count == 0)
+{
+    <div class="alert alert-info">
+        此任務尚未有來源 schema 快照（drift 偵測首次執行時自動建立）。
+        儲存後手動觸發一次任務即可建立。
+    </div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body small">
+            <div>
+                Snapshot 建立時間：
+                <code>@(_task.SchemaSnapshotAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—")</code>
+                · 來源：<code>@_task.SourceSchema.@_task.SourceTable</code>
+            </div>
+            @if (_loadError is not null)
+            {
+                <div class="alert alert-danger mt-2 mb-0">無法讀取 live schema：@_loadError</div>
+            }
+            else if (_live is not null)
+            {
+                <div class="text-muted mt-1">
+                    Snapshot 共 @_snapshot.Count 欄位 / Live 共 @_live.Count 欄位 ·
+                    <span class="@(_diffSummary.HasAny ? "text-warning fw-bold" : "text-success")">
+                        @(_diffSummary.HasAny
+                            ? $"⚠ {_diffSummary.Added} 新增 / {_diffSummary.Removed} 移除 / {_diffSummary.Changed} 型別變更"
+                            : "✓ 無漂移，schema 完全一致")
+                    </span>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Snapshot（@_task.SchemaSnapshotAt?.ToLocalTime().ToString("MM-dd HH:mm")）</div>
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr><th>欄位</th><th>型別</th><th style="width:60px">Null</th><th style="width:60px">PK</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in _snapshot)
+                        {
+                            var status = StatusFor(c.Name);
+                            <tr class="@status.RowClass">
+                                <td>
+                                    <code>@c.Name</code>
+                                    @if (status.Badge is not null)
+                                    {
+                                        <span class="badge ms-2 @status.BadgeClass">@status.Badge</span>
+                                    }
+                                </td>
+                                <td><code class="small text-muted">@c.DataType</code></td>
+                                <td class="small text-muted">@(c.Nullable ? "y" : "n")</td>
+                                <td class="small text-muted">@(c.IsPrimaryKey ? "y" : "n")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">Live (現在)</div>
+                @if (_loading)
+                {
+                    <div class="card-body small text-muted">查詢中…</div>
+                }
+                else if (_loadError is not null)
+                {
+                    <div class="card-body small text-danger">查詢失敗：@_loadError</div>
+                }
+                else if (_live is null)
+                {
+                    <div class="card-body small text-muted">尚未查詢</div>
+                }
+                else
+                {
+                    <table class="table table-sm mb-0">
+                        <thead>
+                            <tr><th>欄位</th><th>型別</th><th style="width:60px">Null</th><th style="width:60px">PK</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in _live)
+                            {
+                                var status = LiveStatusFor(c);
+                                <tr class="@status.RowClass">
+                                    <td>
+                                        <code>@c.Name</code>
+                                        @if (status.Badge is not null)
+                                        {
+                                            <span class="badge ms-2 @status.BadgeClass">@status.Badge</span>
+                                        }
+                                    </td>
+                                    <td><code class="small text-muted">@c.DataType</code></td>
+                                    <td class="small text-muted">@(c.Nullable ? "y" : "n")</td>
+                                    <td class="small text-muted">@(c.IsPrimaryKey ? "y" : "n")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private EtlTool.Core.Models.EtlTask? _task;
+    private List<EtlTool.Core.Models.ColumnInfo> _snapshot = new();
+    private List<EtlTool.Core.Models.ColumnInfo>? _live;
+    private bool _loading;
+    private string? _loadError;
+
+    private record DiffSummary(int Added, int Removed, int Changed, bool HasAny);
+    private DiffSummary _diffSummary = new(0, 0, 0, false);
+    private HashSet<string> _addedNames = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> _removedNames = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string> _changedSummary = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var ct = CancellationToken.None;
+            _task = await TaskRepo.GetWithMappingsAsync(Id, ct);
+            if (_task is null) return;
+
+            // 解析 snapshot
+            if (!string.IsNullOrEmpty(_task.SourceSchemaSnapshotJson))
+            {
+                try
+                {
+                    _snapshot = System.Text.Json.JsonSerializer
+                        .Deserialize<List<EtlTool.Core.Models.ColumnInfo>>(_task.SourceSchemaSnapshotJson)
+                        ?? new();
+                }
+                catch { _snapshot = new(); }
+            }
+
+            // 抓 live schema
+            var def = await ConnRepo.GetAsync(_task.SourceConnectionId, ct);
+            if (def is not null)
+            {
+                try
+                {
+                    var connector = ConnectorFactory.Create(def);
+                    _live = (await connector.ListColumnsAsync(_task.SourceSchema, _task.SourceTable, ct)).ToList();
+                }
+                catch (Exception ex)
+                {
+                    _loadError = ex.Message;
+                }
+            }
+
+            ComputeDiff();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ComputeDiff()
+    {
+        _addedNames.Clear();
+        _removedNames.Clear();
+        _changedSummary.Clear();
+        if (_live is null) return;
+
+        var snapByName = _snapshot.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        var liveByName = _live.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var c in _live)
+            if (!snapByName.ContainsKey(c.Name)) _addedNames.Add(c.Name);
+        foreach (var c in _snapshot)
+            if (!liveByName.ContainsKey(c.Name)) _removedNames.Add(c.Name);
+
+        foreach (var c in _snapshot)
+        {
+            if (liveByName.TryGetValue(c.Name, out var lc))
+            {
+                if (!string.Equals(c.DataType, lc.DataType, StringComparison.OrdinalIgnoreCase)
+                    || c.Nullable != lc.Nullable
+                    || c.IsPrimaryKey != lc.IsPrimaryKey)
+                {
+                    _changedSummary[c.Name] = $"snapshot={c.DataType}/{(c.Nullable ? "null" : "notnull")}{(c.IsPrimaryKey ? "/PK" : "")} → live={lc.DataType}/{(lc.Nullable ? "null" : "notnull")}{(lc.IsPrimaryKey ? "/PK" : "")}";
+                }
+            }
+        }
+
+        var has = _addedNames.Count + _removedNames.Count + _changedSummary.Count > 0;
+        _diffSummary = new DiffSummary(_addedNames.Count, _removedNames.Count, _changedSummary.Count, has);
+    }
+
+    private record CellStatus(string? RowClass, string? Badge, string? BadgeClass);
+
+    private CellStatus StatusFor(string colName)
+    {
+        if (_removedNames.Contains(colName))
+            return new CellStatus("table-danger", "已移除", "bg-danger");
+        if (_changedSummary.TryGetValue(colName, out var change))
+            return new CellStatus("table-warning", "型別變更", "bg-warning text-dark");
+        return new CellStatus(null, null, null);
+    }
+
+    private CellStatus LiveStatusFor(EtlTool.Core.Models.ColumnInfo c)
+    {
+        if (_addedNames.Contains(c.Name))
+            return new CellStatus("table-success", "新增", "bg-success");
+        if (_changedSummary.ContainsKey(c.Name))
+            return new CellStatus("table-warning", "型別變更", "bg-warning text-dark");
+        return new CellStatus(null, null, null);
+    }
+}

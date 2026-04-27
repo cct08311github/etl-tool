@@ -18,6 +18,9 @@
     @if (Id is not null)
     {
         <div class="d-flex gap-2">
+            <a class="btn btn-outline-warning btn-sm" href="@($"tasks/{Id}/schema-drift")">
+                <Icon Name="alert-triangle" /> Schema 漂移
+            </a>
             <button class="btn btn-outline-info btn-sm" @onclick="ShowWebhookPreview">
                 <Icon Name="zap" /> 預覽 webhook payload
             </button>
@@ -138,6 +141,12 @@ else
                     </label>
                     <input class="form-control" type="number" min="1" max="100"
                            placeholder="(留空=用全域 / 0)" @bind="_task.AutoDisableAfterFailures" />
+                </div>
+                <div class="col-12">
+                    <label class="form-label">Ops 交接備註
+                        <small class="text-muted">業主、on-call、特殊維護程序、相依關係…</small>
+                    </label>
+                    <textarea class="form-control" rows="2" maxlength="2000" placeholder="例：業主 alice@bank；on-call bob@bank；02-04 維護需先停 task" @bind="_task.Notes"></textarea>
                 </div>
             </div>
             @if (Id is not null)
