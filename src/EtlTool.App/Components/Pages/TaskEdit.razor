@@ -362,6 +362,7 @@ else
                                     <option value="@EtlTool.Core.Models.FileSourceFormat.Csv">CSV</option>
                                     <option value="@EtlTool.Core.Models.FileSourceFormat.Excel">Excel (.xlsx)</option>
                                     <option value="@EtlTool.Core.Models.FileSourceFormat.DelimitedText">文字檔（自訂分隔）</option>
+                                    <option value="@EtlTool.Core.Models.FileSourceFormat.FixedWidth">固定欄寬（主機/COBOL）</option>
                                 </select>
                             </div>
                             <div class="col-6">
@@ -376,17 +377,25 @@ else
                                 </select>
                             </div>
                         </div>
-                        @if (_fileConfig.Format != EtlTool.Core.Models.FileSourceFormat.Excel)
+                        @if (_fileConfig.Format == EtlTool.Core.Models.FileSourceFormat.Csv ||
+                             _fileConfig.Format == EtlTool.Core.Models.FileSourceFormat.DelimitedText)
                         {
                             <div class="row g-2 mt-2">
-                                <div class="col-6">
+                                <div class="col-4">
                                     <label class="form-label">分隔字元</label>
                                     <input class="form-control font-monospace" @bind="_fileConfig.Delimiter"
                                            @bind:after="UpdateFileConfigJson"
                                            placeholder=", 或 \t" />
-                                    <small class="text-muted">用 \t 表示 tab；\n / \r 同理</small>
+                                    <small class="text-muted">用 \t 表示 tab</small>
                                 </div>
-                                <div class="col-6 d-flex align-items-end">
+                                <div class="col-4">
+                                    <label class="form-label">引號字元</label>
+                                    <input class="form-control font-monospace" @bind="_fileConfig.QuoteCharacter"
+                                           @bind:after="UpdateFileConfigJson"
+                                           maxlength="1" placeholder='" 或 留空' />
+                                    <small class="text-muted">支援 "XXX","YYY"；留空關掉引號處理</small>
+                                </div>
+                                <div class="col-4 d-flex align-items-end">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox"
                                                @bind="_fileConfig.HasHeader" @bind:after="UpdateFileConfigJson" id="hasHeader" />
@@ -395,7 +404,71 @@ else
                                 </div>
                             </div>
                         }
-                        else
+                        else if (_fileConfig.Format == EtlTool.Core.Models.FileSourceFormat.FixedWidth)
+                        {
+                            <div class="mt-2">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <label class="form-label m-0">欄位 layout（1-based 起點 + 長度）</label>
+                                    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="AddFixedWidthColumn">
+                                        <Icon Name="plus" /> 新增欄位
+                                    </button>
+                                </div>
+                                @if (_fwColumns.Count == 0)
+                                {
+                                    <div class="alert alert-info small mt-2 py-2 mb-2">
+                                        尚未設定 layout。每行對應一個欄位。對照 COBOL FILE SECTION：PIC X(10) → Length=10。
+                                    </div>
+                                }
+                                else
+                                {
+                                    <table class="table table-sm mt-2 mb-1">
+                                        <thead>
+                                            <tr>
+                                                <th>欄位名</th>
+                                                <th style="width: 90px">起點 (1-)</th>
+                                                <th style="width: 90px">長度</th>
+                                                <th style="width: 60px" title="自動 trim 前後空白">Trim</th>
+                                                <th style="width: 40px"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @for (int i = 0; i < _fwColumns.Count; i++)
+                                            {
+                                                var idx = i;
+                                                <tr>
+                                                    <td>
+                                                        <input class="form-control form-control-sm font-monospace"
+                                                               @bind="_fwColumns[idx].Name" @bind:after="UpdateFwLayoutJson"
+                                                               placeholder="ID / NAME / AMOUNT" />
+                                                    </td>
+                                                    <td>
+                                                        <input type="number" min="1" class="form-control form-control-sm"
+                                                               @bind="_fwColumns[idx].Start" @bind:after="UpdateFwLayoutJson" />
+                                                    </td>
+                                                    <td>
+                                                        <input type="number" min="1" class="form-control form-control-sm"
+                                                               @bind="_fwColumns[idx].Length" @bind:after="UpdateFwLayoutJson" />
+                                                    </td>
+                                                    <td class="text-center">
+                                                        <input type="checkbox" class="form-check-input"
+                                                               @bind="_fwColumns[idx].TrimWhitespace" @bind:after="UpdateFwLayoutJson" />
+                                                    </td>
+                                                    <td>
+                                                        <button type="button" class="btn btn-sm btn-link p-0 text-danger"
+                                                                @onclick="@(() => RemoveFixedWidthColumn(idx))" title="移除">×</button>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                    <small class="text-muted">
+                                        對照 COBOL：<code>01 RECORD. 02 ID PIC 9(5). 02 NAME PIC X(20).</code>
+                                        → ID Start=1 Length=5；NAME Start=6 Length=20
+                                    </small>
+                                }
+                            </div>
+                        }
+                        else  // Excel
                         {
                             <div class="row g-2 mt-2">
                                 <div class="col-6">
@@ -686,8 +759,88 @@ else
     </div>
 
     <div class="card mb-3">
-        <div class="card-header">欄位映射</div>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>欄位映射</span>
+            @if (_task.SourceKind == EtlTool.Core.Models.SourceKind.File)
+            {
+                <button type="button" class="btn btn-sm btn-outline-primary"
+                        disabled="@(_headerScanBusy || string.IsNullOrEmpty(_fileConfig.DirectoryPath))"
+                        @onclick="ScanHeaderAndSuggest">
+                    @if (_headerScanBusy) { <Icon Name="loader" /> <span>掃描中…</span> }
+                    else { <span>🔍 掃描來源 header 並建議修正</span> }
+                </button>
+            }
+        </div>
         <div class="card-body">
+            @if (_headerSuggestions is not null && _headerSuggestions.Count > 0)
+            {
+                <div class="alert alert-info small mb-3">
+                    <strong>來源檔 header 比對結果（檔：<code>@_headerScanFileName</code>）：</strong>
+                    <table class="table table-sm small mt-2 mb-2">
+                        <thead>
+                            <tr>
+                                <th style="width: 30%">目前 SourceColumn</th>
+                                <th style="width: 18%">狀態</th>
+                                <th style="width: 30%">建議改成</th>
+                                <th class="text-end">動作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var s in _headerSuggestions)
+                            {
+                                var bg = s.Strategy switch
+                                {
+                                    EtlTool.Core.Engine.CsvHeaderMatcher.MatchStrategy.ExactMatch => "bg-success",
+                                    EtlTool.Core.Engine.CsvHeaderMatcher.MatchStrategy.CaseInsensitive => "bg-info text-dark",
+                                    EtlTool.Core.Engine.CsvHeaderMatcher.MatchStrategy.NormalizedCanonical => "bg-info text-dark",
+                                    EtlTool.Core.Engine.CsvHeaderMatcher.MatchStrategy.FuzzyLevenshtein => "bg-warning text-dark",
+                                    _ => "bg-danger",
+                                };
+                                <tr>
+                                    <td><code>@s.Original</code></td>
+                                    <td><span class="badge @bg">@EtlTool.Core.Engine.CsvHeaderMatcher.StrategyLabel(s.Strategy)</span></td>
+                                    <td>
+                                        @if (s.Suggested is not null && s.Suggested != s.Original)
+                                        {
+                                            <code>@s.Suggested</code>
+                                        }
+                                        else if (s.Suggested == s.Original)
+                                        {
+                                            <span class="text-muted small">—（已一致）</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted small">—</span>
+                                        }
+                                    </td>
+                                    <td class="text-end">
+                                        @if (s.Suggested is not null && s.Suggested != s.Original
+                                             && s.Strategy != EtlTool.Core.Engine.CsvHeaderMatcher.MatchStrategy.None)
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                                    @onclick="@(() => ApplySuggestion(s))">套用</button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <div class="d-flex gap-2">
+                        @if (_headerSuggestions.Any(x => x.Suggested is not null && x.Suggested != x.Original
+                            && x.Strategy != EtlTool.Core.Engine.CsvHeaderMatcher.MatchStrategy.None))
+                        {
+                            <button type="button" class="btn btn-sm btn-primary" @onclick="ApplyAllSuggestions">
+                                全部套用建議
+                            </button>
+                        }
+                        <button type="button" class="btn btn-sm btn-link" @onclick="() => _headerSuggestions = null">關閉</button>
+                    </div>
+                </div>
+            }
+            @if (!string.IsNullOrEmpty(_headerScanError))
+            {
+                <div class="alert alert-warning small mb-3">⚠ @_headerScanError</div>
+            }
             <MappingEditor
                 Mappings="@_task.Mappings"
                 SourceColumns="@_sourceColumns"
@@ -975,6 +1128,116 @@ else
         _task.FileSourceConfigJson = System.Text.Json.JsonSerializer.Serialize(_fileConfig);
     }
 
+    // ── Fixed-width layout editor state ────────────────────────────────
+    private List<EtlTool.Core.Models.FixedWidthColumn> _fwColumns = new();
+
+    private void AddFixedWidthColumn()
+    {
+        // 預設下一欄起點 = 上一欄的 Start + Length
+        var nextStart = _fwColumns.Count == 0
+            ? 1
+            : _fwColumns[^1].Start + _fwColumns[^1].Length;
+        _fwColumns.Add(new EtlTool.Core.Models.FixedWidthColumn
+        {
+            Name = "",
+            Start = nextStart,
+            Length = 1,
+            TrimWhitespace = true,
+        });
+        UpdateFwLayoutJson();
+    }
+
+    private void RemoveFixedWidthColumn(int index)
+    {
+        if (index < 0 || index >= _fwColumns.Count) return;
+        _fwColumns.RemoveAt(index);
+        UpdateFwLayoutJson();
+    }
+
+    private void UpdateFwLayoutJson()
+    {
+        _fileConfig.FixedWidthLayoutJson = System.Text.Json.JsonSerializer.Serialize(_fwColumns);
+        UpdateFileConfigJson();
+    }
+
+    // ── CSV header auto-suggest state ──────────────────────────────────
+    private bool _headerScanBusy;
+    private string? _headerScanError;
+    private string? _headerScanFileName;
+    private List<EtlTool.Core.Engine.CsvHeaderMatcher.Suggestion>? _headerSuggestions;
+
+    private async Task ScanHeaderAndSuggest()
+    {
+        _headerScanBusy = true;
+        _headerScanError = null;
+        _headerSuggestions = null;
+        StateHasChanged();
+        try
+        {
+            await Task.Yield();  // 讓 UI 顯示「掃描中」
+            // 找一個符合 glob 的檔
+            var matches = EtlTool.Core.Engine.FileSourceScanner.Scan(new EtlTool.Core.Models.FileSourceConfig
+            {
+                DirectoryPath = _fileConfig.DirectoryPath,
+                GlobPattern = _fileConfig.GlobPattern,
+                MaxFilesPerRun = 1,
+                ArchiveDirectory = _fileConfig.ArchiveDirectory,
+            });
+            if (matches.Count == 0)
+            {
+                _headerScanError = $"目錄 {_fileConfig.DirectoryPath} 內沒有符合 glob「{_fileConfig.GlobPattern}」的檔。";
+                return;
+            }
+            var first = matches[0];
+            _headerScanFileName = first.FileName;
+
+            // 開檔讀 header
+            var reader = EtlTool.Core.Engine.FileSourceReaderFactory.Create(_fileConfig.Format);
+            var openResult = await reader.OpenAsync(first.FullPath, _fileConfig, CancellationToken.None);
+            using var dr = openResult.Reader;
+            var actualHeaders = openResult.ColumnNames;
+
+            // 比對現有 mappings 的 SourceColumn
+            var expected = _task.Mappings.Select(m => m.SourceColumn).Where(s => !string.IsNullOrEmpty(s)).ToList();
+            _headerSuggestions = EtlTool.Core.Engine.CsvHeaderMatcher.FindMatches(expected, actualHeaders);
+        }
+        catch (Exception ex)
+        {
+            _headerScanError = $"掃描失敗：{ex.Message}";
+        }
+        finally
+        {
+            _headerScanBusy = false;
+        }
+    }
+
+    private void ApplySuggestion(EtlTool.Core.Engine.CsvHeaderMatcher.Suggestion s)
+    {
+        if (s.Suggested is null || s.Suggested == s.Original) return;
+        foreach (var m in _task.Mappings)
+        {
+            if (m.SourceColumn == s.Original)
+            {
+                m.SourceColumn = s.Suggested;
+            }
+        }
+        // 從 list 移除已套用的（避免重複）
+        _headerSuggestions = _headerSuggestions?.Where(x => x.Original != s.Original).ToList();
+    }
+
+    private void ApplyAllSuggestions()
+    {
+        if (_headerSuggestions is null) return;
+        foreach (var s in _headerSuggestions
+            .Where(x => x.Suggested is not null && x.Suggested != x.Original
+                && x.Strategy != EtlTool.Core.Engine.CsvHeaderMatcher.MatchStrategy.None)
+            .ToList())
+        {
+            ApplySuggestion(s);
+        }
+        _headerSuggestions = null;
+    }
+
     private EtlTool.App.Services.SourcePreviewService.PreviewResult? _previewResult;
 
     private async Task RunSourcePreview()
@@ -1215,6 +1478,20 @@ else
             catch
             {
                 _fileConfig = new EtlTool.Core.Models.FileSourceConfig();
+            }
+        }
+        // 還原 fixed-width layout
+        if (!string.IsNullOrEmpty(_fileConfig.FixedWidthLayoutJson))
+        {
+            try
+            {
+                _fwColumns = System.Text.Json.JsonSerializer
+                    .Deserialize<List<EtlTool.Core.Models.FixedWidthColumn>>(_fileConfig.FixedWidthLayoutJson)
+                    ?? new List<EtlTool.Core.Models.FixedWidthColumn>();
+            }
+            catch
+            {
+                _fwColumns = new();
             }
         }
     }

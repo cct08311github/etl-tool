@@ -46,6 +46,11 @@ public sealed class CsvFileSourceReader : IFileSourceReader
             MissingFieldFound = null,    // 缺欄位回 null 而不是 throw
             DetectColumnCountChanges = false,
             TrimOptions = TrimOptions.None,  // 不自動 trim — 客戶有時要保留前後空白
+            // 引號字元：預設 " 支援 "XXX","YYY" 與 "包含,逗號"；
+            // 設空字串 → '\0' 等於關掉引號處理（純 delimiter 切）
+            Quote = string.IsNullOrEmpty(config.QuoteCharacter) ? '\0' : config.QuoteCharacter[0],
+            // 雙引號跳脫（"" 代表一個 "）— RFC 4180 標準
+            Escape = string.IsNullOrEmpty(config.QuoteCharacter) ? '\0' : config.QuoteCharacter[0],
         };
 
         var csv = new CsvReader(textReader, csvConfig);

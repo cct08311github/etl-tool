@@ -39,6 +39,7 @@ public static class FileSourceReaderFactory
         FileSourceFormat.Csv => new CsvFileSourceReader(),
         FileSourceFormat.Excel => new ExcelFileSourceReader(),
         FileSourceFormat.DelimitedText => new DelimitedTextFileSourceReader(),
+        FileSourceFormat.FixedWidth => new FixedWidthFileSourceReader(),
         _ => throw new ArgumentOutOfRangeException(nameof(format), format, null),
     };
 }

@@ -135,6 +135,101 @@ public class CsvFileSourceReaderTests : IDisposable
     }
 
     [Fact]
+    public async Task All_fields_quoted_format_works()
+    {
+        // 「"XXX","YYY","ZZZ"」這種全部欄位都被引號包覆的格式（銀行第三方檔常見）
+        var path = WriteFile("allquoted.csv",
+            "\"id\",\"name\",\"region\"\n" +
+            "\"1001\",\"Alice Smith\",\"台北市\"\n" +
+            "\"1002\",\"Bob Lee\",\"高雄市\"\n");
+        var config = new FileSourceConfig { Format = FileSourceFormat.Csv, HasHeader = true, Delimiter = "," };
+        var reader = new CsvFileSourceReader();
+        var result = await reader.OpenAsync(path, config, default);
+        Assert.Equal(new[] { "id", "name", "region" }, result.ColumnNames);
+        using var dr = result.Reader;
+        Assert.True(dr.Read());
+        Assert.Equal("1001", dr.GetValue(0));
+        Assert.Equal("Alice Smith", dr.GetValue(1));
+        Assert.Equal("台北市", dr.GetValue(2));
+    }
+
+    [Fact]
+    public async Task Quote_inside_quoted_value_unescapes()
+    {
+        // RFC 4180: 引號內的引號用 "" 跳脫
+        var path = WriteFile("escaped.csv",
+            "id,note\n" +
+            "1,\"He said \"\"hello\"\" loudly\"\n");
+        var config = new FileSourceConfig { Format = FileSourceFormat.Csv, HasHeader = true, Delimiter = "," };
+        var reader = new CsvFileSourceReader();
+        var result = await reader.OpenAsync(path, config, default);
+        using var dr = result.Reader;
+        dr.Read();
+        Assert.Equal("He said \"hello\" loudly", dr.GetValue(1));
+    }
+
+    [Fact]
+    public async Task Custom_quote_character_single_quote_works()
+    {
+        // 某些第三方工具用單引號當 quote
+        var path = WriteFile("singlequote.csv",
+            "id,name\n" +
+            "1,'Alice, Smith'\n");
+        var config = new FileSourceConfig
+        {
+            Format = FileSourceFormat.Csv,
+            HasHeader = true,
+            Delimiter = ",",
+            QuoteCharacter = "'",
+        };
+        var reader = new CsvFileSourceReader();
+        var result = await reader.OpenAsync(path, config, default);
+        using var dr = result.Reader;
+        dr.Read();
+        Assert.Equal("Alice, Smith", dr.GetValue(1));
+    }
+
+    [Fact]
+    public async Task Empty_quote_character_disables_quote_handling()
+    {
+        // 設空字串 → 不處理引號，純按 delimiter 切（引號變成 literal 字元）
+        var path = WriteFile("noquote.csv",
+            "id|name\n" +
+            "1|\"literal quotes\"\n");
+        var config = new FileSourceConfig
+        {
+            Format = FileSourceFormat.Csv,
+            HasHeader = true,
+            Delimiter = "|",
+            QuoteCharacter = "",
+        };
+        var reader = new CsvFileSourceReader();
+        var result = await reader.OpenAsync(path, config, default);
+        using var dr = result.Reader;
+        dr.Read();
+        // 引號保留為字面字元
+        Assert.Equal("\"literal quotes\"", dr.GetValue(1));
+    }
+
+    [Fact]
+    public async Task Tab_separated_with_quoted_chinese()
+    {
+        var path = WriteFile("tab_zh.tsv",
+            "編號\t姓名\t地址\n" +
+            "\"001\"\t\"Alice\"\t\"台北市\\t信義區\"\n");  // \\t in quoted = literal but rare
+        var config = new FileSourceConfig
+        {
+            Format = FileSourceFormat.Csv,
+            HasHeader = true,
+            Delimiter = "\t",
+            QuoteCharacter = "\"",
+        };
+        var reader = new CsvFileSourceReader();
+        var result = await reader.OpenAsync(path, config, default);
+        Assert.Equal(new[] { "編號", "姓名", "地址" }, result.ColumnNames);
+    }
+
+    [Fact]
     public async Task Throws_for_missing_file()
     {
         var reader = new CsvFileSourceReader();

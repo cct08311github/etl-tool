@@ -46,6 +46,41 @@ public static class EtlTaskValidator
                     {
                         errors.Add("檔案模式：歸檔目錄不可與來源目錄相同");
                     }
+                    if (cfg.Format == FileSourceFormat.FixedWidth)
+                    {
+                        if (string.IsNullOrWhiteSpace(cfg.FixedWidthLayoutJson))
+                        {
+                            errors.Add("固定欄寬模式：請至少設定一個欄位 layout");
+                        }
+                        else
+                        {
+                            try
+                            {
+                                var fwCols = System.Text.Json.JsonSerializer
+                                    .Deserialize<List<FixedWidthColumn>>(cfg.FixedWidthLayoutJson);
+                                if (fwCols is null || fwCols.Count == 0)
+                                    errors.Add("固定欄寬模式：layout 至少需一個欄位");
+                                else
+                                {
+                                    int idx = 0;
+                                    foreach (var fc in fwCols)
+                                    {
+                                        idx++;
+                                        if (string.IsNullOrWhiteSpace(fc.Name))
+                                            errors.Add($"固定欄寬：第 {idx} 個欄位 Name 為空");
+                                        if (fc.Start < 1)
+                                            errors.Add($"固定欄寬：欄位「{fc.Name}」Start 必須 ≥ 1");
+                                        if (fc.Length < 1)
+                                            errors.Add($"固定欄寬：欄位「{fc.Name}」Length 必須 ≥ 1");
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                errors.Add("固定欄寬：layout JSON 解析失敗");
+                            }
+                        }
+                    }
                 }
             }
         }

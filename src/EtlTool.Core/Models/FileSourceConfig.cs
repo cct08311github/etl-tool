@@ -11,13 +11,32 @@ public enum SourceKind
 }
 
 /// <summary>
-/// 檔案格式。CSV / Excel(.xlsx) / 自訂分隔字元的 plain text。
+/// 檔案格式。
+///   - CSV / Excel(.xlsx) / 自訂分隔字元的 plain text
+///   - FixedWidth: 主機 / COBOL 系統匯出的「固定欄寬」.txt（無分隔字元，按 1-based
+///     位置 + 長度切欄位；mainframe 銀行業務最常見）
 /// </summary>
 public enum FileSourceFormat
 {
     Csv = 0,
     Excel = 1,
     DelimitedText = 2,
+    FixedWidth = 3,
+}
+
+/// <summary>
+/// Fixed-width 欄位設定。1-based 位置（COBOL / 主機規格慣例）。
+/// 例：「1-5 ID, 6-25 NAME, 26-30 AMOUNT」
+///   → [{Name="ID", Start=1, Length=5}, {Name="NAME", Start=6, Length=20}, {Name="AMOUNT", Start=26, Length=5}]
+/// </summary>
+public sealed class FixedWidthColumn
+{
+    public string Name { get; set; } = "";
+    /// <summary>欄位起始位置（1-based）。</summary>
+    public int Start { get; set; } = 1;
+    public int Length { get; set; } = 1;
+    /// <summary>是否自動 trim 前後空白（mainframe 用空白填滿固定欄寬，幾乎都要 true）。</summary>
+    public bool TrimWhitespace { get; set; } = true;
 }
 
 /// <summary>
@@ -65,6 +84,15 @@ public sealed class FileSourceConfig
     /// <summary>欄位分隔字元（CSV/DelimitedText 用）— 例：, 或 \t（用字面 \t 表示 tab）</summary>
     public string Delimiter { get; set; } = ",";
 
+    /// <summary>
+    /// 引號字元（CSV/DelimitedText 用）— 預設 "（雙引號）。
+    /// 銀行 / 第三方檔案常見：欄位用引號包覆以容納欄位內的逗號、換行、引號（雙引號跳脫）。
+    ///   "12345","Alice, Smith","台北市"
+    ///   "ID","欄位名包含""引號"",ZZZ"
+    /// 想關掉引號處理（純按 delimiter 切）→ 設空字串。
+    /// </summary>
+    public string QuoteCharacter { get; set; } = "\"";
+
     /// <summary>Excel 用：sheet 名稱（空字串 = 第 1 個 sheet）</summary>
     public string ExcelSheetName { get; set; } = "";
 
@@ -75,4 +103,7 @@ public sealed class FileSourceConfig
 
     /// <summary>每次排程觸發處理幾個檔（多檔模式）— 預設 1，避免一次跑爆。0 = 不限。</summary>
     public int MaxFilesPerRun { get; set; } = 1;
+
+    /// <summary>Fixed-width 用：欄位切位點清單（JSON 序列化的 List&lt;FixedWidthColumn&gt;）。</summary>
+    public string FixedWidthLayoutJson { get; set; } = "";
 }
