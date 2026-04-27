@@ -1725,11 +1725,20 @@ else
     private async Task DryRun()
     {
         if (_task is null) return;
-        // 預覽前需要：來源連線/schema/table 已選；mapping 可空（會抓全欄）
+        // 依 SourceKind 分流檢查必填欄位
         var basicErrors = new List<string>();
-        if (_task.SourceConnectionId == Guid.Empty) basicErrors.Add("請先選擇來源連線");
-        if (string.IsNullOrEmpty(_task.SourceSchema)) basicErrors.Add("請先選擇來源 Schema");
-        if (string.IsNullOrEmpty(_task.SourceTable)) basicErrors.Add("請先選擇來源 Table");
+        if (_task.SourceKind == EtlTool.Core.Models.SourceKind.Database)
+        {
+            if (_task.SourceConnectionId == Guid.Empty) basicErrors.Add("請先選擇來源連線");
+            if (string.IsNullOrEmpty(_task.SourceSchema)) basicErrors.Add("請先選擇來源 Schema");
+            if (string.IsNullOrEmpty(_task.SourceTable)) basicErrors.Add("請先選擇來源 Table");
+        }
+        else  // File
+        {
+            if (string.IsNullOrEmpty(_fileConfig.DirectoryPath)) basicErrors.Add("請先填寫來源目錄");
+            if (string.IsNullOrEmpty(_fileConfig.GlobPattern)) basicErrors.Add("請先填寫檔名 glob 樣式");
+            if (_task.Mappings.Count == 0) basicErrors.Add("請先至少設定一個欄位映射");
+        }
         if (basicErrors.Count > 0)
         {
             _validationErrors = basicErrors;
@@ -1744,7 +1753,26 @@ else
         StateHasChanged();
         try
         {
-            _dryRunRows = await EtlEngine.PreviewSourceAsync(_task, 5, CancellationToken.None);
+            if (_task.SourceKind == EtlTool.Core.Models.SourceKind.File)
+            {
+                // File 模式走 SourcePreviewService
+                var preview = await SourcePreview.PreviewAsync(_task, rowLimit: 5, CancellationToken.None);
+                if (!preview.Ok)
+                {
+                    _dryRunError = preview.Error;
+                    _dryRunRows = new();
+                }
+                else
+                {
+                    _dryRunRows = preview.Rows
+                        .Select(r => r.ToDictionary(kv => kv.Key, kv => kv.Value))
+                        .ToList();
+                }
+            }
+            else
+            {
+                _dryRunRows = await EtlEngine.PreviewSourceAsync(_task, 5, CancellationToken.None);
+            }
         }
         catch (Exception ex)
         {
