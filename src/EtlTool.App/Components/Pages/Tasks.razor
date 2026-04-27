@@ -147,6 +147,38 @@
     <div class="alert @(_isError ? "alert-danger" : "alert-info")">@_message</div>
 }
 
+@if (_items is not null && _items.Count > 5)
+{
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-center">
+                <div class="col-md-4">
+                    <input class="form-control form-control-sm" placeholder="🔍 任務名稱搜尋…" @bind="_filterName" @bind:after="ApplyFilter" />
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select form-select-sm" @bind="_filterEnabled" @bind:after="ApplyFilter">
+                        <option value="">全部狀態</option>
+                        <option value="enabled">僅啟用</option>
+                        <option value="disabled">僅停用</option>
+                        <option value="autodisabled">僅 auto-disabled</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select form-select-sm" @bind="_filterSla" @bind:after="ApplyFilter">
+                        <option value="">全部 SLA</option>
+                        <option value="bad">SLA &lt; 95%</option>
+                        <option value="ok">SLA ≥ 95%</option>
+                        <option value="none">尚無資料</option>
+                    </select>
+                </div>
+                <div class="col-md-2 text-end small text-muted">
+                    顯示 @(_filtered?.Count ?? 0) / @_items.Count
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @if (_items is null)
 {
     <p class="text-muted">載入中…</p>
@@ -177,12 +209,13 @@ else
                 <th>上次成功</th>
                 <th>上次失敗</th>
                 <th>SLA (30d)</th>
+                <th style="width:80px">趨勢</th>
                 <th>啟用</th>
                 <th class="text-end">操作</th>
             </tr>
         </thead>
         <tbody>
-        @foreach (var t in _items)
+        @foreach (var t in (_filtered ?? _items))
         {
             <tr>
                 <td>
@@ -271,6 +304,43 @@ else
                     else
                     {
                         <span class="text-muted">—</span>
+                    }
+                </td>
+                <td>
+                    @{
+                        if (_recentRunsByTask.TryGetValue(t.Id, out var recent) && recent.Count > 0)
+                        {
+                            var maxSec = _recentMaxByTask.TryGetValue(t.Id, out var mx) ? mx : 0;
+                            <svg width="76" height="20" viewBox="0 0 76 20" preserveAspectRatio="none" style="display:block">
+                            @{
+                                var spkN = recent.Count;
+                                var barW = spkN > 0 ? Math.Max(1.0, (76.0 - (spkN - 1) * 1) / spkN) : 0;
+                            }
+                            @for (int i = 0; i < spkN; i++)
+                            {
+                                var r = recent[i];
+                                var sec = r.FinishedAt is null ? 0 : (r.FinishedAt.Value - r.StartedAt).TotalSeconds;
+                                var h = maxSec > 0 ? Math.Max(1.5, sec / maxSec * 18) : 1.5;
+                                var x = i * (barW + 1);
+                                var y = 19 - h;
+                                var color = r.Status == RunStatus.Success ? "#10b981" : "#ef4444";
+                                <rect x="@x.ToString("F1")" y="@y.ToString("F1")" width="@barW.ToString("F1")" height="@h.ToString("F1")" fill="@color" />
+                            }
+                            </svg>
+                            if (_p95ByTask.TryGetValue(t.Id, out var p95))
+                            {
+                                var lastDur = recent[^1].FinishedAt is null ? 0 : (recent[^1].FinishedAt!.Value - recent[^1].StartedAt).TotalSeconds;
+                                var regression = p95 > 0 && lastDur > 2 * p95;
+                                <small class="@(regression ? "text-danger fw-bold" : "text-muted")"
+                                       title="@($"p95 = {p95:F0}s；最近一筆 {lastDur:F0}s")">
+                                    p95 @($"{p95:F0}")s@(regression ? " ⚠" : "")
+                                </small>
+                            }
+                        }
+                        else
+                        {
+                            <span class="text-muted small">—</span>
+                        }
                     }
                 </td>
                 <td class="small">
@@ -366,11 +436,45 @@ else
 
 @code {
     private List<EtlTool.Core.Models.EtlTask>? _items;
+    private List<EtlTool.Core.Models.EtlTask>? _filtered;
     private Dictionary<Guid, DateTimeOffset?> _nextFire = new();
     private Dictionary<Guid, DateTime> _lastSuccess = new();
     private Dictionary<Guid, DateTime> _lastFailure = new();
     private Dictionary<Guid, (int Success, int Total)> _sla = new();
+    private Dictionary<Guid, List<EtlTool.Data.Repositories.RunHistorySummary>> _recentRunsByTask = new();
+    private Dictionary<Guid, double> _recentMaxByTask = new();
+    private Dictionary<Guid, double> _p95ByTask = new();
     private HashSet<Guid> _pendingTargets = new();
+
+    private string _filterName = "";
+    private string _filterEnabled = "";
+    private string _filterSla = "";
+
+    private void ApplyFilter()
+    {
+        if (_items is null) { _filtered = null; return; }
+        IEnumerable<EtlTool.Core.Models.EtlTask> q = _items;
+        if (!string.IsNullOrWhiteSpace(_filterName))
+        {
+            var s = _filterName.Trim();
+            q = q.Where(t => t.Name.Contains(s, StringComparison.OrdinalIgnoreCase));
+        }
+        q = _filterEnabled switch
+        {
+            "enabled"      => q.Where(t => t.Enabled),
+            "disabled"     => q.Where(t => !t.Enabled && t.AutoDisabledAt is null),
+            "autodisabled" => q.Where(t => t.AutoDisabledAt is not null),
+            _ => q,
+        };
+        q = _filterSla switch
+        {
+            "bad" => q.Where(t => _sla.TryGetValue(t.Id, out var s) && s.Total > 0 && s.Success * 100.0 / s.Total < 95),
+            "ok"  => q.Where(t => _sla.TryGetValue(t.Id, out var s) && s.Total > 0 && s.Success * 100.0 / s.Total >= 95),
+            "none" => q.Where(t => !_sla.TryGetValue(t.Id, out var s) || s.Total == 0),
+            _ => q,
+        };
+        _filtered = q.ToList();
+    }
     private Guid? _running;
     private string? _currentUsername;
     private string? _message;
@@ -409,11 +513,40 @@ else
         _lastSuccess = await RunHistoryRepo.LastSuccessByTaskAsync(ct);
         _lastFailure = await RunHistoryRepo.LastFailureByTaskAsync(ct);
         _sla = await RunHistoryRepo.SuccessRateByTaskAsync(TimeSpan.FromDays(30), ct);
+
+        // Sparkline + p95 — 過去 30 天每個 task 取最近 20 筆
+        _recentRunsByTask = await RunHistoryRepo.RecentRunsByTaskAsync(TimeSpan.FromDays(30), 20, ct);
+        _recentMaxByTask.Clear();
+        _p95ByTask.Clear();
+        foreach (var (tid, runs) in _recentRunsByTask)
+        {
+            var durs = runs
+                .Where(r => r.FinishedAt is not null)
+                .Select(r => (r.FinishedAt!.Value - r.StartedAt).TotalSeconds)
+                .OrderBy(d => d).ToList();
+            if (durs.Count > 0)
+            {
+                _recentMaxByTask[tid] = durs.Max();
+                // p95 by linear interpolation
+                if (durs.Count == 1) _p95ByTask[tid] = durs[0];
+                else
+                {
+                    var idx = 0.95 * (durs.Count - 1);
+                    var lo = (int)Math.Floor(idx);
+                    var hi = (int)Math.Ceiling(idx);
+                    var frac = idx - lo;
+                    _p95ByTask[tid] = durs[lo] + (durs[hi] - durs[lo]) * frac;
+                }
+            }
+        }
+
         var pending = await ApprovalRepo.ListPendingAsync(ct);
         _pendingTargets = pending
             .Where(p => p.Action == ApprovalAction.DeleteTask)
             .Select(p => p.TargetId)
             .ToHashSet();
+
+        ApplyFilter();
     }
 
     private async Task OnEnableToggle(EtlTool.Core.Models.EtlTask task, bool enabled)

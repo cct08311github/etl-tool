@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EtlTool.Data.Repositories;
 
-public sealed class RunHistoryRepository : IRunHistorySink
+public sealed partial class RunHistoryRepository : IRunHistorySink
 {
     /// <summary>每個 task 保留最近 N 筆，超出由背景清除。</summary>
     public const int RetainPerTask = 100;
@@ -69,6 +69,37 @@ public sealed class RunHistoryRepository : IRunHistorySink
     /// <summary>IRunHistorySink 介面的同名方法 — 把 Dictionary 包成 IReadOnlyDictionary 回傳。</summary>
     async Task<IReadOnlyDictionary<Guid, DateTime>> IRunHistorySink.LastSuccessByTaskAsync(CancellationToken ct)
         => await LastSuccessByTaskAsync(ct);
+
+    /// <summary>
+    /// 一次撈過去 N 天每個 task 的最近 K 筆 run（給 Tasks list inline sparkline 用）。
+    /// 用一個 Where + 排序的 query，在 memory 裡 group + take N 避免 N+1。
+    /// 只回傳 Status / StartedAt / FinishedAt（sparkline 與 p95 計算需要的最小欄位）。
+    /// </summary>
+    public async Task<Dictionary<Guid, List<RunHistorySummary>>> RecentRunsByTaskAsync(
+        TimeSpan window, int takePerTask, CancellationToken ct)
+    {
+        var since = DateTime.UtcNow.Subtract(window);
+        var raw = await _db.RunHistories
+            .AsNoTracking()
+            .Where(r => r.StartedAt >= since && r.Status != RunStatus.Running)
+            .Select(r => new RunHistorySummary(
+                r.EtlTaskId, r.StartedAt, r.FinishedAt, r.Status))
+            .ToListAsync(ct);
+
+        return raw
+            .GroupBy(r => r.EtlTaskId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderByDescending(r => r.StartedAt).Take(takePerTask).Reverse().ToList());
+    }
+}
+
+/// <summary>給 Tasks list inline sparkline / p95 計算用的精簡 record。</summary>
+public sealed record RunHistorySummary(
+    Guid EtlTaskId, DateTime StartedAt, DateTime? FinishedAt, RunStatus Status);
+
+public sealed partial class RunHistoryRepository
+{
 
     /// <summary>
     /// 同 LastSuccessByTaskAsync 但抓 Failed runs。給 Tasks list 顯示「上次失敗」用。
