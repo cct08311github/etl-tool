@@ -45,13 +45,15 @@
                         Format 來自 <code>Webhooks:Format</code> 設定（目前 = <code>@_webhookFormat</code>）。
                         Streak / Recovery prefix 由 <code>StreakAwareFailureNotifier</code> 加，這裡呈現「第 N 次連敗達門檻」的範例。
                     </div>
-                    <div class="d-flex gap-2 mb-2">
+                    <div class="d-flex gap-2 mb-2 flex-wrap">
                         <button class="btn btn-sm @(_previewVariant == "fail" ? "btn-primary" : "btn-outline-secondary")"
                                 @onclick="SetPreviewVariantFail">單次失敗</button>
                         <button class="btn btn-sm @(_previewVariant == "streak" ? "btn-primary" : "btn-outline-secondary")"
                                 @onclick="SetPreviewVariantStreak">[STREAK] 達門檻</button>
                         <button class="btn btn-sm @(_previewVariant == "recovery" ? "btn-primary" : "btn-outline-secondary")"
                                 @onclick="SetPreviewVariantRecovery">[RECOVERY] 恢復</button>
+                        <button class="btn btn-sm @(_previewVariant == "success" ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="SetPreviewVariantSuccess">單次成功 (一般執行不送)</button>
                     </div>
                     <pre class="bg-light p-2 mb-0" style="max-height: 480px; overflow: auto; font-size: 0.8rem">@_webhookPreviewJson</pre>
                 </div>
@@ -581,6 +583,14 @@ else
 
     <div class="d-flex gap-2">
         <button class="btn btn-primary" @onclick="Save">儲存</button>
+        @if (Id is not null)
+        {
+            <button class="btn btn-success" @onclick="SaveAndRun" disabled="@_saveAndRunBusy"
+                    title="儲存設定後立即手動觸發一次（不必再回 Tasks list 按 ▶）">
+                @if (_saveAndRunBusy) { <Icon Name="loader" /> <span>處理中…</span> }
+                else { <span>💾▶ 儲存並立即執行</span> }
+            </button>
+        }
         <button class="btn btn-outline-info" @onclick="DryRun" disabled="@_dryRunBusy">
             @(_dryRunBusy ? "預覽中…" : "👀 預覽前 5 筆")
         </button>
@@ -665,6 +675,38 @@ else
 
     private bool _dryRunBusy;
     private bool _dryRunModal;
+    private bool _saveAndRunBusy;
+    private bool _suppressNavigateAfterSave;
+
+    private async Task SaveAndRun()
+    {
+        if (_task is null || Id is null) return;
+        _saveAndRunBusy = true;
+        _suppressNavigateAfterSave = true;
+        try
+        {
+            // Save() 內部用 _suppressNavigateAfterSave 跳過 NavigateTo，留在原頁
+            await Save();
+            // 若驗證失敗 / PII 攔截 / 弱密碼 modal → _validationErrors 或 _showPiiSuggest 會被設
+            if (_validationErrors.Count > 0 || _showPiiSuggest) return;
+            try
+            {
+                await Scheduler.TriggerNowAsync(Id.Value, CancellationToken.None);
+                _isError = false;
+                _message = "已儲存並觸發手動執行；可至『執行歷史』查看結果。";
+            }
+            catch (Exception ex)
+            {
+                _isError = true;
+                _message = $"儲存成功但觸發失敗：{ex.Message}";
+            }
+        }
+        finally
+        {
+            _saveAndRunBusy = false;
+            _suppressNavigateAfterSave = false;
+        }
+    }
     private List<Dictionary<string, object?>>? _dryRunRows;
     private string? _dryRunError;
 
@@ -709,6 +751,7 @@ else
     private void SetPreviewVariantFail() => SetPreviewVariant("fail");
     private void SetPreviewVariantStreak() => SetPreviewVariant("streak");
     private void SetPreviewVariantRecovery() => SetPreviewVariant("recovery");
+    private void SetPreviewVariantSuccess() => SetPreviewVariant("success");
 
     private void BuildPreview()
     {
@@ -719,6 +762,7 @@ else
         {
             "streak" => MakePreviewRun(EtlTool.Core.Models.RunStatus.Failed, "[STREAK 3/3] connection refused: timed out"),
             "recovery" => MakePreviewRun(EtlTool.Core.Models.RunStatus.Success, "[RECOVERY after 3 consecutive failures]"),
+            "success" => MakePreviewRun(EtlTool.Core.Models.RunStatus.Success, null),
             _ => MakePreviewRun(EtlTool.Core.Models.RunStatus.Failed, "connection refused: timed out"),
         };
 
@@ -732,7 +776,7 @@ else
     }
 
     private (EtlTool.Core.Models.RunHistory run, string? error) MakePreviewRun(
-        EtlTool.Core.Models.RunStatus status, string error)
+        EtlTool.Core.Models.RunStatus status, string? error)
     {
         var run = new EtlTool.Core.Models.RunHistory
         {
@@ -1022,7 +1066,8 @@ else
                 saved = await TaskRepo.UpdateAsync(_task, CancellationToken.None, actor: _currentUsername);
             }
             await Scheduler.RescheduleAsync(saved.Id, CancellationToken.None);
-            Nav.NavigateTo("tasks");
+            if (!_suppressNavigateAfterSave)
+                Nav.NavigateTo("tasks");
         }
         catch (Exception ex)
         {

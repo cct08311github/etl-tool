@@ -61,6 +61,49 @@
     </div>
 </div>
 
+@if (_runs is not null && _runs.Count > 0)
+{
+    @* 最近 30 筆 duration sparkline — 視覺化 outliers + 成功失敗趨勢 *@
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            <div class="small text-muted mb-1">
+                最近 @Math.Min(_runs.Count, 30) 筆執行時間（左舊 → 右新；綠 = Success / 紅 = Failed / 灰 = Running）
+                @if (_durationStats.MaxSec > 0)
+                {
+                    <span> · max @($"{_durationStats.MaxSec:F1}") 秒 · avg @($"{_durationStats.AvgSec:F1}") 秒</span>
+                }
+            </div>
+            @{
+                var recent = _runs.OrderBy(r => r.StartedAt).TakeLast(30).ToList();
+            }
+            <svg width="100%" height="40" viewBox="0 0 600 40" preserveAspectRatio="none" style="display:block">
+                @{
+                    var n = recent.Count;
+                    var barW = n > 0 ? Math.Max(2, (600 - (n - 1) * 2) / n) : 0;
+                    var maxSec = _durationStats.MaxSec;
+                }
+                @for (int i = 0; i < n; i++)
+                {
+                    var r = recent[i];
+                    var sec = r.FinishedAt is null ? 0 : (r.FinishedAt.Value - r.StartedAt).TotalSeconds;
+                    var h = maxSec > 0 ? Math.Max(2, sec / maxSec * 36) : 2;
+                    var x = i * (barW + 2);
+                    var y = 38 - h;
+                    var color = r.Status switch
+                    {
+                        RunStatus.Success => "#10b981",
+                        RunStatus.Failed => "#ef4444",
+                        _ => "#9ca3af",
+                    };
+                    <rect x="@x" y="@y" width="@barW" height="@h" fill="@color" rx="1">
+                        <title>@r.StartedAt.ToLocalTime():MM-dd HH:mm — @r.Status, @($"{sec:F1}")s</title>
+                    </rect>
+                }
+            </svg>
+        </div>
+    </div>
+}
+
 @if (_runs is null)
 {
     <p class="text-muted">載入中…</p>
@@ -138,6 +181,9 @@ else
     private List<EtlTool.Core.Models.RunHistory>? _filtered;
     private string? _taskName;
 
+    private record DurationStats(double MaxSec, double AvgSec);
+    private DurationStats _durationStats = new(0, 0);
+
     private string _filterStatus = "";
     private string _filterTrigger = "";
     private DateTime? _filterFrom;
@@ -155,6 +201,17 @@ else
         _runs = await RunRepo.ListByTaskAsync(Id, 100, ct);
         var task = await TaskRepo.GetWithMappingsAsync(Id, ct);
         _taskName = task?.Name;
+
+        // Compute duration stats over last 30 runs (matches sparkline range)
+        var recent = _runs.OrderBy(r => r.StartedAt).TakeLast(30).ToList();
+        var durations = recent
+            .Where(r => r.FinishedAt is not null)
+            .Select(r => (r.FinishedAt!.Value - r.StartedAt).TotalSeconds)
+            .ToList();
+        _durationStats = durations.Count > 0
+            ? new DurationStats(durations.Max(), durations.Average())
+            : new DurationStats(0, 0);
+
         ApplyFilter();
     }
 
