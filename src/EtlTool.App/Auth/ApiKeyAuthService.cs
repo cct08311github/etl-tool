@@ -24,6 +24,9 @@ public sealed class ApiKeyAuthService
     public IReadOnlyList<string> KeyFingerprints =>
         _hashedKeys.Select(h => Convert.ToHexString(h, 0, 4).ToLowerInvariant()).ToList();
 
+    // [ActivatorUtilitiesConstructor] 告訴 DI 容器：兩個建構式時優先選這個。
+    // 否則 ValidateOnBuild 會 throw「ambiguous constructors」。
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public ApiKeyAuthService(IConfiguration config)
         : this(config.GetSection("Api:Keys").Get<string[]>() ?? Array.Empty<string>())
     { }

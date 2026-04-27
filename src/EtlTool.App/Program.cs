@@ -161,8 +161,12 @@ builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOpt
 builder.Services.AddSingleton<UserAuthService>();
 builder.Services.AddSingleton(builder.Configuration.GetSection("Auth:Lockout").Get<LoginLockoutOptions>() ?? new LoginLockoutOptions());
 builder.Services.AddSingleton<LoginLockoutService>();
-builder.Services.AddSingleton<AdminIpAllowlistService>();
-builder.Services.AddSingleton<ApiKeyAuthService>();
+// 兩個 service 都有 (IConfiguration) 與 (IEnumerable<string>) 兩個建構式，
+// ValidateOnBuild 會抗議 ambiguous — 用 factory 明確指定走 IConfiguration 那條
+builder.Services.AddSingleton<AdminIpAllowlistService>(sp =>
+    new AdminIpAllowlistService(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<ApiKeyAuthService>(sp =>
+    new ApiKeyAuthService(sp.GetRequiredService<IConfiguration>()));
 
 // Rate limiting on /api/* — 60 req/min per IP（保護後端 DB 不被監控腳本打爆）
 builder.Services.AddRateLimiter(options =>

@@ -21,6 +21,8 @@ public sealed class AdminIpAllowlistService
     public bool IsEnabled { get; }
     public IReadOnlyList<string> RawEntries { get; }
 
+    // [ActivatorUtilitiesConstructor] 告訴 DI 兩個建構式時選 IConfiguration 那個。
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public AdminIpAllowlistService(IConfiguration config)
         : this(config.GetSection("Auth:AdminIpAllowlist").Get<string[]>() ?? Array.Empty<string>())
     { }
