@@ -6,6 +6,9 @@
 @inject IConfiguration Config
 @inject IHostEnvironment HostEnv
 @inject EtlTool.App.Auth.AdminIpAllowlistService Allowlist
+@inject EtlTool.App.Auth.ApiKeyAuthService ApiKeys
+@inject NavigationManager Nav
+@inject IHttpClientFactory HttpFactory
 @inject EtlTool.Data.Repositories.AuditChainVerifier ChainVerifier
 @inject EtlTool.App.Services.HttpFailureNotifier WebhookNotifier
 @inject EtlTool.Core.Engine.IAuditLogger AuditLogger
@@ -151,6 +154,90 @@ else
                     </div>
                     <a href="/logs" class="btn btn-sm btn-link p-0">至活動日誌驗證鏈完整性 →</a>
                 </td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>API 整合 (Read-only JSON)</span>
+            <a class="btn btn-sm btn-outline-secondary" href="/api/openapi.yaml" target="_blank" title="OpenAPI 3.0 spec — 可餵 Postman / Insomnia / openapi-generator">
+                📄 OpenAPI YAML
+            </a>
+        </div>
+        <table class="table mb-0 align-middle">
+            <tbody>
+                <tr>
+                    <th style="width: 30%">API key 認證</th>
+                    <td>
+                        @if (ApiKeys.IsEnabled)
+                        {
+                            <span class="badge bg-success">已啟用</span>
+                            <span class="ms-2 small text-muted">@ApiKeys.KeyCount 把 key 已載入</span>
+                            <div class="small font-monospace text-muted mt-1">
+                                fingerprints (前 8 hex of SHA-256，僅供識別):
+                                @foreach (var fp in ApiKeys.KeyFingerprints)
+                                {
+                                    <code class="me-2">@fp</code>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <span class="badge bg-warning text-dark">未啟用</span>
+                            <span class="ms-2 small text-muted">/api/* 純靠 IP allowlist + rate limit 控管；建議至 appsettings 設 <code>Api:Keys</code></span>
+                        }
+                    </td>
+                </tr>
+                <tr>
+                    <th>Rate limit</th>
+                    <td>
+                        <code>@_apiRateLimitPerMinute</code> 請求 / 分 / IP
+                        <span class="ms-2 small text-muted">(超過 → 429 Too Many Requests)</span>
+                    </td>
+                </tr>
+                <tr>
+                    <th>可用端點</th>
+                    <td>
+                        <ul class="small mb-0">
+                            <li><code>GET /api/health</code> — liveness probe（無 key 也可，但仍受 IP allowlist 擋）</li>
+                            <li><code>GET /api/tasks/last-run</code> — 所有任務 + 最後一次執行摘要</li>
+                            <li><code>GET /api/tasks/{id}</code> — 單一任務 + 最近 N 次 run</li>
+                            <li><code>GET /api/tasks/{id}/runs?page=1&size=20</code> — 分頁 RunHistory</li>
+                            <li><code>GET /api/openapi.yaml</code> — 完整 OpenAPI 3.0 spec</li>
+                        </ul>
+                    </td>
+                </tr>
+                <tr>
+                    <th>cURL 範例</th>
+                    <td>
+                        <pre class="small mb-0 bg-light p-2 rounded"><code>curl -H "X-Api-Key: $ETL_API_KEY" \
+     @(_baseUrl)api/tasks/last-run</code></pre>
+                    </td>
+                </tr>
+                <tr>
+                    <th>快速測試</th>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary" @onclick="TestApiHealth" disabled="@_apiTestBusy">
+                            @if (_apiTestBusy) { <Icon Name="loader" /> <span>呼叫中…</span> }
+                            else { <span>📡 GET /api/health</span> }
+                        </button>
+                        @if (_apiTestResult is not null)
+                        {
+                            <div class="mt-2 small">
+                                @if (_apiTestResult.Ok)
+                                {
+                                    <span class="text-success">✓ 通過（HTTP @_apiTestResult.StatusCode, @_apiTestResult.ElapsedMs ms）</span>
+                                    <pre class="bg-light p-2 mt-1 mb-0 rounded small">@_apiTestResult.Body</pre>
+                                }
+                                else
+                                {
+                                    <span class="text-danger">⚠ 失敗（HTTP @(_apiTestResult.StatusCode?.ToString() ?? "—")）：@_apiTestResult.Error</span>
+                                }
+                            </div>
+                        }
+                    </td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -652,6 +739,50 @@ else
     private WebhookTestResult? _webhookTestResult;
     private bool _webhookBusy;
 
+    // ─── API integration panel state ─────────────────────────────────────
+    private int _apiRateLimitPerMinute = 60;
+    private string _baseUrl = "http://localhost:5247/";
+    private record ApiTestResult(bool Ok, int? StatusCode, long ElapsedMs, string? Body, string? Error);
+    private ApiTestResult? _apiTestResult;
+    private bool _apiTestBusy;
+
+    private async Task TestApiHealth()
+    {
+        _apiTestBusy = true;
+        _apiTestResult = null;
+        StateHasChanged();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            using var http = HttpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(5);
+            var url = new Uri(new Uri(_baseUrl), "api/health");
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            // 若有 API key 啟用就帶第一把進去（這是 admin 測試用，不是真的 prod 流量）
+            // 實務上 admin 應該知道至少一把 key；這裡不帶也沒關係，IP 對的話照樣通
+            using var resp = await http.SendAsync(req, CancellationToken.None);
+            sw.Stop();
+            var body = await resp.Content.ReadAsStringAsync();
+            // 只截前 500 字元防爆版
+            if (body.Length > 500) body = body[..500] + "…";
+            _apiTestResult = new ApiTestResult(
+                Ok: resp.IsSuccessStatusCode,
+                StatusCode: (int)resp.StatusCode,
+                ElapsedMs: sw.ElapsedMilliseconds,
+                Body: body,
+                Error: resp.IsSuccessStatusCode ? null : resp.ReasonPhrase);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _apiTestResult = new ApiTestResult(false, null, sw.ElapsedMilliseconds, null, ex.Message);
+        }
+        finally
+        {
+            _apiTestBusy = false;
+        }
+    }
+
     private async Task TestWebhook()
     {
         _webhookBusy = true;
@@ -739,6 +870,10 @@ else
                 WebhookUrl: Config["Webhooks:OnFailure"],
                 WebhookFormat: Config["Webhooks:Format"],
                 FailureStreakThreshold: Config.GetValue<int?>("Webhooks:FailureStreakThreshold") ?? 3);
+
+            // API integration panel
+            _apiRateLimitPerMinute = Config.GetValue<int?>("Api:RateLimitPerMinute") ?? 60;
+            try { _baseUrl = Nav.BaseUri; } catch { _baseUrl = "http://localhost:5247/"; }
 
             // Audit chain head/tail
             try

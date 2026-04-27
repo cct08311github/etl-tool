@@ -44,6 +44,24 @@ public sealed partial class RunHistoryRepository : IRunHistorySink
             .Take(take)
             .ToListAsync(ct);
 
+    /// <summary>
+    /// 分頁查詢某 task 的歷史。回傳 (items, totalCount)。
+    /// 用於 /api/tasks/{id}/runs?page=N&size=M JSON endpoint。
+    /// page 從 1 起算；page 或 size ≤ 0 視為非法（call site 已 clamp）。
+    /// </summary>
+    public async Task<(List<RunHistory> Items, int Total)> ListByTaskPagedAsync(
+        Guid taskId, int page, int size, CancellationToken ct)
+    {
+        var q = _db.RunHistories.AsNoTracking().Where(r => r.EtlTaskId == taskId);
+        var total = await q.CountAsync(ct);
+        var items = await q
+            .OrderByDescending(r => r.StartedAt)
+            .Skip((page - 1) * size)
+            .Take(size)
+            .ToListAsync(ct);
+        return (items, total);
+    }
+
     public Task<List<RunHistory>> ListRecentAsync(int take, CancellationToken ct)
         => _db.RunHistories.AsNoTracking()
             .OrderByDescending(r => r.StartedAt)

@@ -361,6 +361,66 @@ app.MapGet("/api/tasks/{taskId:guid}", async (Guid taskId, HttpContext ctx) =>
         new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
 }).AllowAnonymous().RequireRateLimiting("api");
 
+// 單 task 的 RunHistory 分頁 — for downstream auditors / monitoring drill-down
+//   GET /api/tasks/{id}/runs?page=1&size=20
+//   page 從 1 起；size 上限 200 (避免 DOS)；超過範圍 → 空 items 但保留 total
+app.MapGet("/api/tasks/{taskId:guid}/runs", async (Guid taskId, HttpContext ctx) =>
+{
+    int page = 1, size = 20;
+    if (int.TryParse(ctx.Request.Query["page"], out var p) && p >= 1) page = p;
+    if (int.TryParse(ctx.Request.Query["size"], out var sz) && sz >= 1) size = Math.Min(sz, 200);
+
+    var sp = ctx.RequestServices;
+    await using var scope = sp.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<EtlTool.Data.AppDbContext>();
+    var runRepo = scope.ServiceProvider.GetRequiredService<EtlTool.Data.Repositories.RunHistoryRepository>();
+
+    var t = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions
+        .FirstOrDefaultAsync(db.EtlTasks.AsNoTracking(), x => x.Id == taskId, ctx.RequestAborted);
+    if (t is null)
+    {
+        ctx.Response.StatusCode = 404;
+        ctx.Response.ContentType = "application/json; charset=utf-8";
+        await ctx.Response.WriteAsync("""{"error":"task not found"}""", ctx.RequestAborted);
+        return;
+    }
+
+    var (items, total) = await runRepo.ListByTaskPagedAsync(taskId, page, size, ctx.RequestAborted);
+    var totalPages = total == 0 ? 0 : (int)Math.Ceiling(total / (double)size);
+    var payload = new
+    {
+        taskId,
+        taskName = t.Name,
+        page,
+        size,
+        total,
+        totalPages,
+        runs = items.Select(r => new
+        {
+            id = r.Id,
+            startedAt = r.StartedAt,
+            finishedAt = r.FinishedAt,
+            durationSec = r.FinishedAt is null ? 0 : (r.FinishedAt.Value - r.StartedAt).TotalSeconds,
+            status = r.Status.ToString(),
+            triggerType = r.TriggerType.ToString(),
+            rowsRead = r.RowsRead,
+            rowsWritten = r.RowsWritten,
+            errorMessage = r.ErrorMessage,
+        }).ToList(),
+    };
+    ctx.Response.ContentType = "application/json; charset=utf-8";
+    await System.Text.Json.JsonSerializer.SerializeAsync(ctx.Response.Body, payload,
+        new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+}).AllowAnonymous().RequireRateLimiting("api");
+
+// /api/openapi.yaml — 手寫 OpenAPI 3.0 spec，可餵 Postman / Insomnia / openapi-generator
+// 改 endpoint 時記得同步維護此 YAML。
+app.MapGet("/api/openapi.yaml", async (HttpContext ctx) =>
+{
+    ctx.Response.ContentType = "application/yaml; charset=utf-8";
+    await ctx.Response.WriteAsync(EtlTool.App.Services.OpenApiSpec.Yaml, ctx.RequestAborted);
+}).AllowAnonymous().RequireRateLimiting("api");
+
 // /api/health — JSON 版本的 health check（與 /healthz/detail 相同 payload，但 path 風格一致）
 app.MapGet("/api/health", async (HttpContext ctx) =>
 {

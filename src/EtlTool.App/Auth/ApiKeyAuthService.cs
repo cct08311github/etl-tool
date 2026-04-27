@@ -14,6 +14,15 @@ public sealed class ApiKeyAuthService
 {
     private readonly List<byte[]> _hashedKeys;
     public bool IsEnabled { get; }
+    /// <summary>Number of configured keys (after dedupe + whitespace filter). Useful for /system info display.</summary>
+    public int KeyCount => _hashedKeys.Count;
+
+    /// <summary>
+    /// Returns a short fingerprint (first 8 hex chars of SHA-256) for each configured key.
+    /// Lets ops verify "the same key is loaded" without leaking the secret. Order matches input.
+    /// </summary>
+    public IReadOnlyList<string> KeyFingerprints =>
+        _hashedKeys.Select(h => Convert.ToHexString(h, 0, 4).ToLowerInvariant()).ToList();
 
     public ApiKeyAuthService(IConfiguration config)
         : this(config.GetSection("Api:Keys").Get<string[]>() ?? Array.Empty<string>())

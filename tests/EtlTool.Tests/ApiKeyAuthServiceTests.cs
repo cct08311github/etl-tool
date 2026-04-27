@@ -82,5 +82,41 @@ public class ApiKeyAuthServiceTests
         var svc = new ApiKeyAuthService(new[] { "k1", "k1", "k1" });
         Assert.True(svc.IsEnabled);
         Assert.True(svc.IsValid("k1"));
+        // Dedup → KeyCount should be 1, not 3
+        Assert.Equal(1, svc.KeyCount);
+    }
+
+    [Fact]
+    public void KeyCount_reflects_distinct_keys()
+    {
+        Assert.Equal(0, new ApiKeyAuthService(Array.Empty<string>()).KeyCount);
+        Assert.Equal(3, new ApiKeyAuthService(new[] { "a", "b", "c" }).KeyCount);
+        // Whitespace-only entries are filtered before counting
+        Assert.Equal(2, new ApiKeyAuthService(new[] { "x", "  ", "y", "" }).KeyCount);
+    }
+
+    [Fact]
+    public void KeyFingerprints_are_short_hex_and_match_count()
+    {
+        var svc = new ApiKeyAuthService(new[] { "alpha", "beta" });
+        var fps = svc.KeyFingerprints;
+        Assert.Equal(2, fps.Count);
+        // 4 bytes → 8 hex chars
+        Assert.All(fps, fp =>
+        {
+            Assert.Equal(8, fp.Length);
+            Assert.Matches(@"^[0-9a-f]{8}$", fp);
+        });
+        // Different inputs → different fingerprints (collisions on first 4 bytes are vanishingly rare for SHA-256)
+        Assert.NotEqual(fps[0], fps[1]);
+    }
+
+    [Fact]
+    public void KeyFingerprints_stable_across_construction()
+    {
+        // Same input → same fingerprint each time (deterministic SHA-256)
+        var a = new ApiKeyAuthService(new[] { "secret" });
+        var b = new ApiKeyAuthService(new[] { "secret" });
+        Assert.Equal(a.KeyFingerprints[0], b.KeyFingerprints[0]);
     }
 }
