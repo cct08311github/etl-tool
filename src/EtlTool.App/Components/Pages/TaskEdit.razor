@@ -7,6 +7,7 @@
 @inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory
 @inject EtlTool.Core.Scheduling.SchedulerService Scheduler
 @inject EtlTool.Core.Engine.EtlEngine EtlEngine
+@inject EtlTool.App.Services.SourcePreviewService SourcePreview
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthState
 @inject IConfiguration Config
@@ -303,6 +304,18 @@ else
                             }
                         </select>
                     </div>
+                    <div class="mt-3 d-flex gap-2 align-items-center">
+                        <button type="button" class="btn btn-outline-primary btn-sm"
+                                disabled="@(_previewBusy || _task.SourceConnectionId == Guid.Empty || string.IsNullOrEmpty(_task.SourceTable) || _task.Mappings.Count == 0)"
+                                @onclick="RunSourcePreview">
+                            @if (_previewBusy) { <Icon Name="loader" /> <span>查詢中…</span> }
+                            else { <span>👀 預覽前 10 筆來源資料</span> }
+                        </button>
+                        @if (_task.Mappings.Count == 0)
+                        {
+                            <span class="small text-muted">需先設好 Mapping 再預覽</span>
+                        }
+                    </div>
                 </div>
             </div>
         </div>
@@ -351,6 +364,116 @@ else
             </div>
         </div>
     </div>
+
+    @if (_previewResult is not null)
+    {
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>
+                    來源資料預覽
+                    @if (_previewResult.Ok)
+                    {
+                        <span class="badge bg-success ms-2">@_previewResult.Rows.Count 筆 / @_previewResult.ElapsedMs ms</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-danger ms-2">失敗</span>
+                    }
+                    @if (_previewResult.MaskedColumns.Count > 0)
+                    {
+                        <span class="badge bg-warning text-dark ms-2"
+                              title="基於欄位名 PII 啟發式偵測自動遮罩，避免將敏感資料貼到截圖／訊息">
+                            🔒 @_previewResult.MaskedColumns.Count 欄已遮罩
+                        </span>
+                    }
+                </span>
+                <button type="button" class="btn btn-sm btn-link p-0" @onclick="() => _previewResult = null">關閉</button>
+            </div>
+            @if (!_previewResult.Ok)
+            {
+                <div class="card-body alert alert-danger small mb-0">
+                    <strong>查詢失敗：</strong> @_previewResult.Error
+                    @if (!string.IsNullOrEmpty(_previewResult.Sql))
+                    {
+                        <details class="mt-2">
+                            <summary class="small">送出的 SQL</summary>
+                            <pre class="small mb-0 mt-1">@_previewResult.Sql</pre>
+                        </details>
+                    }
+                </div>
+            }
+            else
+            {
+                @if (!string.IsNullOrEmpty(_previewResult.Sql))
+                {
+                    <div class="card-body py-2 small text-muted border-bottom">
+                        <details>
+                            <summary>送出的 SQL（已套用 filter / TOP 10）</summary>
+                            <pre class="small mb-0 mt-1">@_previewResult.Sql</pre>
+                        </details>
+                    </div>
+                }
+                @if (_previewResult.MaskedColumns.Count > 0)
+                {
+                    <div class="card-body py-2 small text-muted border-bottom">
+                        自動遮罩欄位（PiiDetector 命中）：
+                        @foreach (var c in _previewResult.MaskedColumns)
+                        {
+                            <code class="me-1">@c</code>
+                        }
+                    </div>
+                }
+                @if (_previewResult.Rows.Count == 0)
+                {
+                    <div class="card-body small text-muted">沒有資料 — 過濾條件可能太嚴或表是空的。</div>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover small mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="text-muted" style="width: 30px">#</th>
+                                    @foreach (var col in _previewResult.Columns)
+                                    {
+                                        <th>
+                                            @col
+                                            @if (_previewResult.MaskedColumns.Contains(col))
+                                            {
+                                                <span class="ms-1 text-warning" title="PII 自動遮罩">🔒</span>
+                                            }
+                                        </th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @for (int idx = 0; idx < _previewResult.Rows.Count; idx++)
+                                {
+                                    var row = _previewResult.Rows[idx];
+                                    <tr>
+                                        <td class="text-muted small">@(idx + 1)</td>
+                                        @foreach (var col in _previewResult.Columns)
+                                        {
+                                            <td class="small">
+                                                @if (row.TryGetValue(col, out var v) && v is not null)
+                                                {
+                                                    <code class="small">@FormatPreviewValue(v)</code>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted small fst-italic">null</span>
+                                                }
+                                            </td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+        </div>
+    }
 
     <div class="card mb-3">
         <div class="card-header">寫入模式</div>
@@ -696,6 +819,49 @@ else
     private bool _isError;
     private bool _refreshingSource;
     private bool _refreshingTarget;
+
+    // Source preview state — 顯示前 10 筆 source data 給 admin 在存檔前 sanity check
+    private bool _previewBusy;
+    private EtlTool.App.Services.SourcePreviewService.PreviewResult? _previewResult;
+
+    private async Task RunSourcePreview()
+    {
+        _previewBusy = true;
+        _previewResult = null;
+        StateHasChanged();
+        try
+        {
+            _previewResult = await SourcePreview.PreviewAsync(_task, rowLimit: 10, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // 防呆：service 內已 catch；這裡只是 last-resort
+            _previewResult = new EtlTool.App.Services.SourcePreviewService.PreviewResult(
+                Ok: false, Sql: null,
+                Columns: Array.Empty<string>(),
+                Rows: Array.Empty<Dictionary<string, object?>>(),
+                MaskedColumns: Array.Empty<string>(),
+                ElapsedMs: 0, Error: $"預覽呼叫意外失敗：{ex.Message}");
+        }
+        finally
+        {
+            _previewBusy = false;
+        }
+    }
+
+    /// <summary>截斷 + ToString 預覽資料，避免 BLOB / 超長字串撐爆表格。</summary>
+    private static string FormatPreviewValue(object value)
+    {
+        var s = value switch
+        {
+            byte[] bs => $"<{bs.Length} bytes>",
+            DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss"),
+            _ => value.ToString() ?? "",
+        };
+        if (s.Length > 80) s = s[..77] + "…";
+        return s;
+    }
+
     private List<string> _validationErrors = new();
 
     private bool _dryRunBusy;

@@ -105,6 +105,8 @@ builder.Services.AddScoped<AuditQueryRepository>();
 builder.Services.AddScoped<AuditChainVerifier>();
 builder.Services.AddSingleton<IAuditLogger, AuditLogger>();
 
+builder.Services.AddScoped<EtlTool.App.Services.SourcePreviewService>();
+
 builder.Services.AddScoped<IConnectionLookup>(sp => sp.GetRequiredService<ConnectionRepository>());
 builder.Services.AddScoped<IEtlTaskLookup>(sp => sp.GetRequiredService<EtlTaskRepository>());
 builder.Services.AddScoped<IAllEtlTasksProvider>(sp => sp.GetRequiredService<EtlTaskRepository>());
@@ -233,6 +235,31 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
 });
+
+// HTTPS 強制（Security:RequireHttps=true 才會 effective）— 必須在 Forwarded headers
+// 之後（讓 X-Forwarded-Proto 生效），但在所有路由 / 認證之前（早 reject 比較省）。
+// 可在啟動 log 看到「Security:RequireHttps=true, no HTTPS endpoint bound」警告。
+app.UseRequireHttps();
+{
+    var requireHttps = builder.Configuration.GetValue<bool?>("Security:RequireHttps") ?? false;
+    if (requireHttps)
+    {
+        var addresses = app.Urls;
+        var hasHttps = addresses.Any(u => u.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+        var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+        if (!hasHttps && addresses.Count > 0)
+        {
+            startupLogger.LogWarning(
+                "⚠ Security:RequireHttps=true 但目前監聽的 endpoint 都不是 HTTPS：{Urls}。" +
+                "若沒走反向代理（IIS/nginx 替你終端 TLS），所有請求都會被擋成 503。",
+                string.Join(", ", addresses));
+        }
+        else
+        {
+            startupLogger.LogInformation("✓ Security:RequireHttps=true generated; HTTPS gate armed.");
+        }
+    }
+}
 
 if (!app.Environment.IsDevelopment())
 {

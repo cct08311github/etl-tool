@@ -361,10 +361,29 @@ public sealed class EtlEngine
         return rows;
     }
 
+    /// <summary>
+    /// Build the read SQL using only the in-memory <see cref="EtlTask"/> + connector.
+    /// 不依賴 TransformEvaluator（不 compile expression），給 UI 預覽 / debug 用。
+    /// </summary>
+    public static (string Sql, IReadOnlyList<(string Name, object? Value)> Params) BuildReadSqlForPreview(
+        IDbConnector connector, EtlTask task)
+    {
+        var sourceCols = task.Mappings.Select(m => m.SourceColumn).Distinct().ToList();
+        if (sourceCols.Count == 0)
+            throw new InvalidOperationException("沒有任何欄位映射 — 無法產生預覽 SQL。請先在 Mapping 分頁加入至少一個欄位。");
+        return BuildReadSqlInner(connector, task, sourceCols);
+    }
+
     private static (string Sql, IReadOnlyList<(string Name, object? Value)> Params) BuildReadSql(
         IDbConnector connector, EtlTask task, TransformEvaluator evaluator)
     {
         var sourceCols = evaluator.Mappings.Select(m => m.SourceColumn).Distinct().ToList();
+        return BuildReadSqlInner(connector, task, sourceCols);
+    }
+
+    private static (string Sql, IReadOnlyList<(string Name, object? Value)> Params) BuildReadSqlInner(
+        IDbConnector connector, EtlTask task, IReadOnlyList<string> sourceCols)
+    {
 
         var sb = new StringBuilder();
         sb.Append("SELECT ");

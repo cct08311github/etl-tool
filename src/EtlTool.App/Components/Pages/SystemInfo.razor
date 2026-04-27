@@ -106,7 +106,19 @@ else
         <div class="card-header">安全</div>
         <table class="table mb-0 align-middle">
             <tbody>
-                <tr><th style="width: 30%">Admin IP allowlist</th><td>
+                <tr><th style="width: 30%">HTTPS 強制</th><td>
+                    @if (_security.RequireHttps)
+                    {
+                        <span class="badge bg-success">已啟用</span>
+                        <span class="ms-2 small text-muted">所有 plain HTTP 請求 → 503（除 /healthz 外）。已套用 X-Forwarded-Proto 反向代理檢查。</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-secondary">未啟用</span>
+                        <span class="ms-2 small text-muted">設 <code>Security:RequireHttps=true</code> 後啟用。Prod 部署強烈建議開。</span>
+                    }
+                </td></tr>
+                <tr><th>Admin IP allowlist</th><td>
                     @if (Allowlist.IsEnabled)
                     {
                         <span class="badge bg-success">已啟用</span>
@@ -577,8 +589,8 @@ else
         int SessionMinutes, int MaxPasswordAgeDays);
     private Retention _retention = new(null, null, null, null, 0, 0);
 
-    private record Security(string? WebhookUrl, string? WebhookFormat, int FailureStreakThreshold, bool WebhookSigned);
-    private Security _security = new(null, null, 0, false);
+    private record Security(string? WebhookUrl, string? WebhookFormat, int FailureStreakThreshold, bool WebhookSigned, bool RequireHttps);
+    private Security _security = new(null, null, 0, false, false);
 
     private string? _chainHeadHash;
     private string? _chainTailHash;
@@ -887,7 +899,8 @@ else
                 WebhookUrl: Config["Webhooks:OnFailure"],
                 WebhookFormat: Config["Webhooks:Format"],
                 FailureStreakThreshold: Config.GetValue<int?>("Webhooks:FailureStreakThreshold") ?? 3,
-                WebhookSigned: !string.IsNullOrEmpty(Config["Webhooks:SigningSecret"]));
+                WebhookSigned: !string.IsNullOrEmpty(Config["Webhooks:SigningSecret"]),
+                RequireHttps: Config.GetValue<bool?>("Security:RequireHttps") ?? false);
 
             // API integration panel
             _apiRateLimitPerMinute = Config.GetValue<int?>("Api:RateLimitPerMinute") ?? 60;
