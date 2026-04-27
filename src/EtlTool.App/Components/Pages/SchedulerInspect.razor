@@ -3,6 +3,7 @@
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
 @inject EtlTool.Core.Scheduling.SchedulerService Scheduler
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject AuthenticationStateProvider AuthState
 @implements IDisposable
 
 <PageTitle>排程器檢視</PageTitle>
@@ -97,6 +98,7 @@ else
                     <th>Cron / 描述</th>
                     <th>上次觸發</th>
                     <th>下次觸發</th>
+                    <th class="text-end">操作</th>
                 </tr>
             </thead>
             <tbody>
@@ -107,7 +109,7 @@ else
                         <tr>
                             <td><code>@j.Group.@j.Name</code></td>
                             <td>@TaskNameFor(j.TaskId)</td>
-                            <td colspan="5" class="text-muted small">(無 trigger — 任務可能已 Disabled)</td>
+                            <td colspan="6" class="text-muted small">(無 trigger — 任務可能已 Disabled)</td>
                         </tr>
                     }
                     else
@@ -122,6 +124,26 @@ else
                                 <td><code class="small text-muted">@(t.Description ?? "—")</code></td>
                                 <td class="small text-muted">@FormatTime(t.PreviousFireTimeUtc)</td>
                                 <td class="small">@FormatTime(t.NextFireTimeUtc)</td>
+                                <td class="text-end">
+                                    @if (t.State == "Paused")
+                                    {
+                                        <button class="btn btn-sm btn-outline-success"
+                                                @onclick="() => ResumeTrigger(t.Name, t.Group)"
+                                                disabled="@_busy"
+                                                title="恢復此 trigger，下次 cron 觸發按原排程">
+                                            <Icon Name="play" /> 恢復
+                                        </button>
+                                    }
+                                    else if (t.State == "Normal")
+                                    {
+                                        <button class="btn btn-sm btn-outline-warning"
+                                                @onclick="() => PauseTrigger(t.Name, t.Group)"
+                                                disabled="@_busy"
+                                                title="暫停此 trigger（任務設定不變，可隨時恢復）">
+                                            <Icon Name="pause" /> 暫停
+                                        </button>
+                                    }
+                                </td>
                             </tr>
                         }
                     }
@@ -135,16 +157,42 @@ else
     private EtlTool.Core.Scheduling.SchedulerInspection? _inspection;
     private Dictionary<Guid, string> _taskNames = new();
     private bool _loading;
+    private bool _busy;
+    private string? _currentUsername;
     private System.Threading.Timer? _timer;
 
     protected override async Task OnInitializedAsync()
     {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        _currentUsername = state.User.Identity?.Name;
         await Refresh();
         _timer = new System.Threading.Timer(async _ =>
         {
             try { await InvokeAsync(Refresh); }
             catch { /* swallow timer-thread errors */ }
         }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private async Task PauseTrigger(string name, string group)
+    {
+        _busy = true;
+        try
+        {
+            await Scheduler.PauseTriggerAsync(name, group, _currentUsername, CancellationToken.None);
+            await Refresh();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ResumeTrigger(string name, string group)
+    {
+        _busy = true;
+        try
+        {
+            await Scheduler.ResumeTriggerAsync(name, group, _currentUsername, CancellationToken.None);
+            await Refresh();
+        }
+        finally { _busy = false; }
     }
 
     private async Task Refresh()

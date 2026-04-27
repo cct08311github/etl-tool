@@ -50,6 +50,12 @@
 
 <div class="card mb-3">
     <div class="card-body">
+        <div class="d-flex flex-wrap gap-3 align-items-center mb-2 small">
+            <span class="text-muted">嚴重性對照：</span>
+            <span><SeverityBadge Severity="@AuditSeverity.Info" /> 一般作業（建立 / 啟用 / 登入 / 成功）</span>
+            <span><SeverityBadge Severity="@AuditSeverity.Warning" /> 須關注（刪除 / 重設密碼 / 失敗 / circuit-breaker tripped）</span>
+            <span><SeverityBadge Severity="@AuditSeverity.Error" /> 異常 (執行失敗、稽核鏈異常等)</span>
+        </div>
         <div class="row g-2 align-items-end">
             <div class="col-md-2">
                 <label class="form-label">類別</label>

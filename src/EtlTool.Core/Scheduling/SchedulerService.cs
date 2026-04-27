@@ -66,6 +66,35 @@ public sealed class SchedulerService
         await scheduler.DeleteJob(JobKeyFor(taskId), ct);
     }
 
+    /// <summary>
+    /// 暫停一個 trigger（通常 group=etl, name="trg_{taskId}"）。
+    /// 與 Enabled=false 不同：Enabled=false 會把 trigger 整個移除；
+    /// PauseTrigger 只暫停下次觸發，trigger metadata + cron expression 保留，
+    /// admin 可以隨時 ResumeTrigger 而不必重新設定。
+    /// 適用情境：來源 DB 維護中，1 小時後恢復。
+    /// </summary>
+    public async Task PauseTriggerAsync(string triggerName, string triggerGroup, string? actor, CancellationToken ct)
+    {
+        var scheduler = await _schedulerFactory.GetScheduler(ct);
+        var key = new TriggerKey(triggerName, triggerGroup);
+        await scheduler.PauseTrigger(key, ct);
+        if (_audit is not null)
+            await _audit.LogAsync(AuditCategory.Scheduler, AuditAction.Update,
+                $"⏸ 暫停 Quartz trigger {triggerGroup}.{triggerName}（task 設定不變）",
+                severity: AuditSeverity.Warning, actor: actor ?? "system", ct: ct);
+    }
+
+    public async Task ResumeTriggerAsync(string triggerName, string triggerGroup, string? actor, CancellationToken ct)
+    {
+        var scheduler = await _schedulerFactory.GetScheduler(ct);
+        var key = new TriggerKey(triggerName, triggerGroup);
+        await scheduler.ResumeTrigger(key, ct);
+        if (_audit is not null)
+            await _audit.LogAsync(AuditCategory.Scheduler, AuditAction.Update,
+                $"▶ 恢復 Quartz trigger {triggerGroup}.{triggerName}",
+                severity: AuditSeverity.Info, actor: actor ?? "system", ct: ct);
+    }
+
     public async Task TriggerNowAsync(Guid taskId, CancellationToken ct)
     {
         var scheduler = await _schedulerFactory.GetScheduler(ct);

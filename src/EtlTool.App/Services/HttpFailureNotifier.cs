@@ -28,6 +28,55 @@ public sealed class HttpFailureNotifier : IFailureNotifier
         _log = log;
     }
 
+    /// <summary>
+    /// 給 admin /system 頁的「Test webhook」按鈕用：
+    /// 用一筆假的成功 run 打 webhook，回 (ok, statusCode, errorMessage)。
+    /// 不寫 audit、不影響任何狀態 — 純配置驗證。
+    /// </summary>
+    public async Task<(bool Ok, int? StatusCode, string? Error)> TestAsync(CancellationToken ct)
+    {
+        var url = _config["Webhooks:OnFailure"];
+        if (string.IsNullOrWhiteSpace(url))
+            return (false, null, "Webhooks:OnFailure 未設定");
+
+        var format = WebhookPayloadBuilder.ParseFormat(_config["Webhooks:Format"]);
+        var fakeTask = new EtlTool.Core.Models.EtlTask
+        {
+            Id = Guid.NewGuid(),
+            Name = "[TEST] Webhook configuration test",
+        };
+        var fakeRun = new EtlTool.Core.Models.RunHistory
+        {
+            Id = Guid.NewGuid(),
+            EtlTaskId = fakeTask.Id,
+            Status = EtlTool.Core.Models.RunStatus.Failed,
+            StartedAt = DateTime.UtcNow.AddMinutes(-1),
+            FinishedAt = DateTime.UtcNow,
+            ErrorMessage = "[TEST] This is a webhook configuration test from /system page. No actual ETL ran.",
+            TriggerType = EtlTool.Core.Models.TriggerType.Manual,
+        };
+        var payload = WebhookPayloadBuilder.BuildPayload(format, fakeTask, fakeRun, fakeRun.ErrorMessage);
+
+        try
+        {
+            using var http = _httpFactory.CreateClient("FailureWebhook");
+            http.Timeout = TimeSpan.FromSeconds(5);
+            using var content = new StringContent(
+                System.Text.Json.JsonSerializer.Serialize(payload),
+                System.Text.Encoding.UTF8, "application/json");
+            using var resp = await http.PostAsync(url, content, ct);
+            return (resp.IsSuccessStatusCode, (int)resp.StatusCode, resp.IsSuccessStatusCode ? null : resp.ReasonPhrase);
+        }
+        catch (TaskCanceledException)
+        {
+            return (false, null, "Timeout (5s)");
+        }
+        catch (Exception ex)
+        {
+            return (false, null, $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     public Task NotifyFailureAsync(EtlTask task, RunHistory run, CancellationToken ct)
         => NotifyRunOutcomeAsync(task, run, ct);
 

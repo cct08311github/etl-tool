@@ -7,6 +7,9 @@
 @inject IHostEnvironment HostEnv
 @inject EtlTool.App.Auth.AdminIpAllowlistService Allowlist
 @inject EtlTool.Data.Repositories.AuditChainVerifier ChainVerifier
+@inject EtlTool.App.Services.HttpFailureNotifier WebhookNotifier
+@inject EtlTool.Core.Engine.IAuditLogger AuditLogger
+@inject AuthenticationStateProvider AuthStateProvider
 
 <PageTitle>系統資訊</PageTitle>
 
@@ -98,6 +101,23 @@ else
                     {
                         <code class="small">@MaskUrl(_security.WebhookUrl)</code>
                         <span class="ms-2 small text-muted">format = @(_security.WebhookFormat ?? "generic")</span>
+                        <button class="btn btn-sm btn-outline-primary ms-2" @onclick="TestWebhook" disabled="@_webhookBusy">
+                            @if (_webhookBusy) { <Icon Name="loader" /> <span>測試中…</span> }
+                            else { <span>📡 測試 webhook</span> }
+                        </button>
+                        @if (_webhookTestResult is not null)
+                        {
+                            <div class="mt-2 small">
+                                @if (_webhookTestResult.Ok)
+                                {
+                                    <span class="text-success">✓ 成功（HTTP @_webhookTestResult.StatusCode）— Slack/Teams 應已收到一筆「[TEST] Webhook configuration test」訊息</span>
+                                }
+                                else
+                                {
+                                    <span class="text-danger">⚠ 失敗（HTTP @(_webhookTestResult.StatusCode?.ToString() ?? "—")）：@_webhookTestResult.Error</span>
+                                }
+                            </div>
+                        }
                     }
                 </td></tr>
                 <tr><th>Failure streak threshold</th><td><code>@_security.FailureStreakThreshold</code> 次</td></tr>
@@ -140,6 +160,35 @@ else
 
     private string? _chainHeadHash;
     private string? _chainTailHash;
+
+    private record WebhookTestResult(bool Ok, int? StatusCode, string? Error);
+    private WebhookTestResult? _webhookTestResult;
+    private bool _webhookBusy;
+
+    private async Task TestWebhook()
+    {
+        _webhookBusy = true;
+        _webhookTestResult = null;
+        try
+        {
+            var (ok, status, err) = await WebhookNotifier.TestAsync(CancellationToken.None);
+            _webhookTestResult = new WebhookTestResult(ok, status, err);
+            // 寫 audit — 不論成敗，admin 動作要留軌跡
+            var state = await AuthStateProvider.GetAuthenticationStateAsync();
+            var actor = state.User.Identity?.Name;
+            await AuditLogger.LogAsync(
+                EtlTool.Core.Models.AuditCategory.System,
+                EtlTool.Core.Models.AuditAction.Update,
+                $"{(ok ? "✓" : "⚠")} 測試 failure webhook：HTTP {status?.ToString() ?? "n/a"}{(string.IsNullOrEmpty(err) ? "" : $"，錯誤：{err}")}",
+                severity: ok ? EtlTool.Core.Models.AuditSeverity.Info : EtlTool.Core.Models.AuditSeverity.Warning,
+                actor: actor,
+                ct: CancellationToken.None);
+        }
+        finally
+        {
+            _webhookBusy = false;
+        }
+    }
 
     protected override async Task OnInitializedAsync() => await Reload();
 
