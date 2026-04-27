@@ -12,6 +12,7 @@
     <h1 class="m-0">排程器檢視</h1>
     <div class="d-flex gap-2 align-items-center">
         <small class="text-muted">每 5 秒自動更新</small>
+        <a class="btn btn-sm btn-outline-secondary" href="/scheduler/preview"><Icon Name="clock" /> 未來 24h 預覽</a>
         <button class="btn btn-sm btn-outline-primary" @onclick="ManualRefresh" disabled="@_loading">
             @if (_loading) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
             <span class="ms-1">重新整理</span>

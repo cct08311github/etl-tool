@@ -235,6 +235,46 @@ app.UseAntiforgery();
 // 否則登入頁本身的樣式會破版且 favicon / blazor.web.js 會被導向回登入頁。
 app.MapStaticAssets().AllowAnonymous();
 app.MapHealthChecks("/healthz").AllowAnonymous();
+
+// Read-only JSON snapshot for external monitoring (Prometheus 已有 /metrics；
+// 此端點提供更細的 per-task 物件結構)。Anonymous + IP allowlist (Account/Api 路徑)。
+app.MapGet("/api/tasks/last-run", async (HttpContext ctx) =>
+{
+    var sp = ctx.RequestServices;
+    await using var scope = sp.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<EtlTool.Data.AppDbContext>();
+    var runRepo = scope.ServiceProvider.GetRequiredService<EtlTool.Data.Repositories.RunHistoryRepository>();
+
+    var tasks = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(
+        db.EtlTasks.AsNoTracking().OrderBy(t => t.Name));
+    var lastSuccess = await runRepo.LastSuccessByTaskAsync(ctx.RequestAborted);
+    var lastFailure = await runRepo.LastFailureByTaskAsync(ctx.RequestAborted);
+    var sla = await runRepo.SuccessRateByTaskAsync(TimeSpan.FromDays(30), ctx.RequestAborted);
+
+    var snapshot = tasks.Select(t => new
+    {
+        id = t.Id,
+        name = t.Name,
+        enabled = t.Enabled,
+        autoDisabledAt = t.AutoDisabledAt,
+        autoDisabledReason = t.AutoDisabledReason,
+        cron = t.CronExpression,
+        tags = t.Tags,
+        lastSuccess = lastSuccess.TryGetValue(t.Id, out var ls) ? (DateTime?)ls : null,
+        lastFailure = lastFailure.TryGetValue(t.Id, out var lf) ? (DateTime?)lf : null,
+        sla30d = sla.TryGetValue(t.Id, out var s) && s.Total > 0
+            ? new { successRate = Math.Round(s.Success * 100.0 / s.Total, 1), success = s.Success, total = s.Total }
+            : null,
+    }).ToList();
+
+    ctx.Response.ContentType = "application/json; charset=utf-8";
+    await System.Text.Json.JsonSerializer.SerializeAsync(ctx.Response.Body, new
+    {
+        generatedAt = DateTime.UtcNow,
+        count = snapshot.Count,
+        tasks = snapshot,
+    }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+}).AllowAnonymous();
 // Detailed health JSON — db / quartz / connection monitor / audit write 各 component 細節
 // 給銀行 ops 監控系統解析；簡單的 /healthz 仍保留供 LB / firewall 用
 app.MapGet("/healthz/detail", async (HttpContext ctx) =>

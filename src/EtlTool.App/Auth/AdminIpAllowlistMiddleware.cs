@@ -24,6 +24,7 @@ public sealed class AdminIpAllowlistMiddleware
         "/Account/SqliteBackup",       // downloading entire DB = extremely sensitive
         "/Account/BackupFile",         // download / delete individual backup files
         "/Account/TasksExport",        // bulk export of all tasks (config snapshot)
+        "/api/",                       // read-only JSON snapshot (last-run etc.)
     };
 
     private readonly RequestDelegate _next;
@@ -55,9 +56,14 @@ public sealed class AdminIpAllowlistMiddleware
             return;
         }
 
-        // 只對已登入且為 Admin 的 user 套用（未登入會先被 cookie auth 擋去 login）
+        // 只對已登入且為 Admin 的 user 套用（未登入會先被 cookie auth 擋去 login）。
+        // 例外：/api/ 是匿名讀取，IP 沒在 allowlist 直接擋掉（讀的人不見得有登入）
         var user = context.User;
-        if (!(user.Identity?.IsAuthenticated ?? false) || !user.IsInRole("Admin"))
+        if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
+        {
+            // anonymous /api/* — IP must match
+        }
+        else if (!(user.Identity?.IsAuthenticated ?? false) || !user.IsInRole("Admin"))
         {
             await _next(context);
             return;
