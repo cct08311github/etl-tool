@@ -1,0 +1,301 @@
+@page "/runs"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin,Operator,Viewer")]
+@inject EtlTool.Data.Repositories.RunHistoryRepository RunRepo
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject NavigationManager Nav
+
+<PageTitle>執行歷史 — 全域</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">執行歷史 — 全域</h1>
+    <div class="d-flex gap-2 align-items-center">
+        <span class="small text-muted">支援按時間 / 狀態 / 任務 / 錯誤類別交叉過濾</span>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-2">
+                <label class="form-label small mb-1">起始 (UTC)</label>
+                <input type="datetime-local" class="form-control form-control-sm" @bind="_filterFrom" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-1">結束 (UTC)</label>
+                <input type="datetime-local" class="form-control form-control-sm" @bind="_filterTo" />
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-1">狀態</label>
+                <select class="form-select form-select-sm" @bind="_filterStatus">
+                    <option value="">全部</option>
+                    <option value="Failed">Failed</option>
+                    <option value="Success">Success</option>
+                    <option value="Running">Running</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-1">錯誤類別</label>
+                <select class="form-select form-select-sm" @bind="_filterErrorClass">
+                    <option value="">全部</option>
+                    <option value="Transient">🔁 暫時性</option>
+                    <option value="Permanent">🛑 永久性</option>
+                    <option value="Unknown">❓ 未分類</option>
+                </select>
+                <small class="text-muted">僅對 Failed run 套用</small>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">任務</label>
+                <select class="form-select form-select-sm" @bind="_filterTaskId">
+                    <option value="">全部任務</option>
+                    @if (_allTasks is not null)
+                    {
+                        @foreach (var t in _allTasks.OrderBy(t => t.Name))
+                        {
+                            <option value="@t.Id">@t.Name</option>
+                        }
+                    }
+                </select>
+            </div>
+            <div class="col-md-1 d-flex">
+                <button class="btn btn-sm btn-primary w-100" @onclick="ApplyFilter" disabled="@_loading">
+                    @if (_loading) { <Icon Name="loader" /> } else { <span>套用</span> }
+                </button>
+            </div>
+        </div>
+        <div class="d-flex gap-2 mt-2">
+            <button type="button" class="btn btn-sm btn-link p-0" @onclick="QuickToday">今日</button>
+            <span class="text-muted">·</span>
+            <button type="button" class="btn btn-sm btn-link p-0" @onclick="QuickLast7Days">近 7 天</button>
+            <span class="text-muted">·</span>
+            <button type="button" class="btn btn-sm btn-link p-0" @onclick="QuickFailedOnly">僅失敗</button>
+            <span class="text-muted">·</span>
+            <button type="button" class="btn btn-sm btn-link p-0" @onclick="ClearFilter">清除</button>
+        </div>
+    </div>
+</div>
+
+@if (_runs is null && _loading)
+{
+    <p class="text-muted">載入中…</p>
+}
+else if (_runs is null)
+{
+    <p class="text-muted">尚未查詢。設好條件後按「套用」。</p>
+}
+else if (_runs.Count == 0)
+{
+    <div class="empty-state">
+        <p>沒有符合條件的 RunHistory。</p>
+    </div>
+}
+else
+{
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>共 <strong>@_total</strong> 筆 — 第 @_page 頁 / 共 @_totalPages 頁</span>
+            <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="PrevPage" disabled="@(_page <= 1)">← 上頁</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="NextPage" disabled="@(_page >= _totalPages)">下頁 →</button>
+            </div>
+        </div>
+        <table class="table table-sm mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th style="width: 160px">開始 (UTC)</th>
+                    <th>任務</th>
+                    <th style="width: 100px">狀態</th>
+                    <th style="width: 100px">觸發</th>
+                    <th style="width: 100px" class="text-end">讀 / 寫</th>
+                    <th style="width: 100px" class="text-end">耗時</th>
+                    <th style="width: 140px">錯誤類別</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _runs)
+                {
+                    var taskName = _taskNamesById.TryGetValue(r.EtlTaskId, out var tn) ? tn : r.EtlTaskId.ToString();
+                    var (badgeBg, badgeIcon) = ClassifyBadge(r);
+                    var classification = r.Status == EtlTool.Core.Models.RunStatus.Failed
+                        ? EtlTool.Core.Engine.EngineErrorClassifier.Classify(new Exception(r.ErrorMessage ?? ""))
+                        : null;
+                    <tr style="cursor: pointer" @onclick="@(() => Nav.NavigateTo($"/runs/{r.Id}"))">
+                        <td><span class="font-monospace small">@r.StartedAt:MM-dd HH:mm:ss</span></td>
+                        <td>
+                            <a href="@($"/runs/{r.Id}")" class="fw-medium">@taskName</a>
+                        </td>
+                        <td>
+                            @if (r.Status == EtlTool.Core.Models.RunStatus.Success)
+                            { <span class="badge bg-success">✓ Success</span> }
+                            else if (r.Status == EtlTool.Core.Models.RunStatus.Failed)
+                            { <span class="badge bg-danger">✗ Failed</span> }
+                            else
+                            { <span class="badge bg-secondary">Running</span> }
+                        </td>
+                        <td><span class="small text-muted">@r.TriggerType</span></td>
+                        <td class="text-end small font-monospace">@r.RowsRead / @r.RowsWritten</td>
+                        <td class="text-end small font-monospace">
+                            @if (r.FinishedAt.HasValue)
+                            {
+                                @FormatElapsed(r.FinishedAt.Value - r.StartedAt)
+                            }
+                            else
+                            {
+                                <span class="text-muted">—</span>
+                            }
+                        </td>
+                        <td>
+                            @if (classification is not null)
+                            {
+                                <span class="badge @badgeBg" title="@classification.Reason">
+                                    @badgeIcon @EtlTool.Core.Engine.EngineErrorClassifier.SubkindLabel(classification.Subkind)
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="text-muted small">—</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="card-footer text-end">
+            <button class="btn btn-sm btn-outline-secondary" @onclick="PrevPage" disabled="@(_page <= 1)">← 上頁</button>
+            <span class="ms-2 me-2 small">第 @_page / @_totalPages 頁</span>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="NextPage" disabled="@(_page >= _totalPages)">下頁 →</button>
+        </div>
+    </div>
+}
+
+@code {
+    private DateTime? _filterFrom;
+    private DateTime? _filterTo;
+    private string _filterStatus = "";
+    private string _filterErrorClass = "";
+    private string _filterTaskId = "";
+
+    private List<EtlTool.Core.Models.EtlTask>? _allTasks;
+    private Dictionary<Guid, string> _taskNamesById = new();
+
+    private List<EtlTool.Core.Models.RunHistory>? _runs;
+    private int _total;
+    private int _page = 1;
+    private const int PageSize = 50;
+    private int _totalPages => _total == 0 ? 1 : (int)Math.Ceiling(_total / (double)PageSize);
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ct = CancellationToken.None;
+        _allTasks = await TaskRepo.ListLightweightAsync(ct);
+        _taskNamesById = _allTasks.ToDictionary(t => t.Id, t => t.Name);
+        // 預設帶「近 7 天 + 失敗」進入：銀行 ops 進來就是要 triage 失敗
+        QuickFailedOnly();
+        await ApplyFilter();
+    }
+
+    private async Task ApplyFilter()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            DateTime? fromUtc = _filterFrom?.ToUniversalTime();
+            DateTime? toUtc = _filterTo?.ToUniversalTime();
+            List<EtlTool.Core.Models.RunStatus>? statuses = null;
+            if (!string.IsNullOrEmpty(_filterStatus)
+                && Enum.TryParse<EtlTool.Core.Models.RunStatus>(_filterStatus, out var st))
+            {
+                statuses = new List<EtlTool.Core.Models.RunStatus> { st };
+            }
+            List<Guid>? taskIds = null;
+            if (!string.IsNullOrEmpty(_filterTaskId) && Guid.TryParse(_filterTaskId, out var tid))
+            {
+                taskIds = new List<Guid> { tid };
+            }
+            string? errorClass = string.IsNullOrEmpty(_filterErrorClass) ? null : _filterErrorClass;
+
+            var (items, total) = await RunRepo.ListFilteredPagedAsync(
+                fromUtc, toUtc, statuses, taskIds, errorClass,
+                _page, PageSize, CancellationToken.None);
+            _runs = items;
+            _total = total;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void QuickToday()
+    {
+        var todayStart = DateTime.UtcNow.Date;
+        _filterFrom = todayStart;
+        _filterTo = DateTime.UtcNow;
+        _filterStatus = "";
+        _filterErrorClass = "";
+        _page = 1;
+    }
+
+    private void QuickLast7Days()
+    {
+        _filterFrom = DateTime.UtcNow.AddDays(-7);
+        _filterTo = DateTime.UtcNow;
+        _filterStatus = "";
+        _filterErrorClass = "";
+        _page = 1;
+    }
+
+    private void QuickFailedOnly()
+    {
+        _filterFrom = DateTime.UtcNow.AddDays(-7);
+        _filterTo = DateTime.UtcNow;
+        _filterStatus = "Failed";
+        _page = 1;
+    }
+
+    private void ClearFilter()
+    {
+        _filterFrom = null;
+        _filterTo = null;
+        _filterStatus = "";
+        _filterErrorClass = "";
+        _filterTaskId = "";
+        _page = 1;
+    }
+
+    private async Task PrevPage()
+    {
+        if (_page <= 1) return;
+        _page--;
+        await ApplyFilter();
+    }
+
+    private async Task NextPage()
+    {
+        if (_page >= _totalPages) return;
+        _page++;
+        await ApplyFilter();
+    }
+
+    private (string Bg, string Icon) ClassifyBadge(EtlTool.Core.Models.RunHistory r)
+    {
+        if (r.Status != EtlTool.Core.Models.RunStatus.Failed) return ("bg-secondary", "");
+        var c = EtlTool.Core.Engine.EngineErrorClassifier.Classify(new Exception(r.ErrorMessage ?? ""));
+        return c.Class switch
+        {
+            EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Transient => ("bg-warning text-dark", "🔁"),
+            EtlTool.Core.Engine.EngineErrorClassifier.EngineErrorClass.Permanent => ("bg-danger", "🛑"),
+            _ => ("bg-secondary", "❓"),
+        };
+    }
+
+    private static string FormatElapsed(TimeSpan ts)
+    {
+        if (ts.TotalSeconds < 1) return $"{ts.TotalMilliseconds:F0} ms";
+        if (ts.TotalMinutes < 1) return $"{ts.TotalSeconds:F1} s";
+        if (ts.TotalHours < 1) return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+        return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+    }
+}

@@ -69,6 +69,73 @@ public sealed partial class RunHistoryRepository : IRunHistorySink
             .ToListAsync(ct);
 
     /// <summary>
+    /// 全域分頁 + 篩選。給 /runs 全域歷史頁面用。
+    /// 篩選都是「至少要符合一個」的 OR-on-list / AND-across-fields 邏輯。
+    /// 注意：errorClass 篩選需要在記憶體端跑分類（無法在 DB 過濾），所以對大量
+    /// 失敗 run 的場景會把符合 status / date / taskId 的全撈進來再分類過濾。
+    /// 實務上 RunHistory 已被保留政策限制，全表通常 ≤ 數萬筆，可接受。
+    /// </summary>
+    public async Task<(List<RunHistory> Items, int Total)> ListFilteredPagedAsync(
+        DateTime? fromUtc,
+        DateTime? toUtc,
+        IReadOnlyCollection<RunStatus>? statuses,
+        IReadOnlyCollection<Guid>? taskIds,
+        string? errorClassFilter,  // null / "Transient" / "Permanent" / "Unknown"
+        int page,
+        int size,
+        CancellationToken ct)
+    {
+        IQueryable<RunHistory> q = _db.RunHistories.AsNoTracking();
+        if (fromUtc.HasValue) q = q.Where(r => r.StartedAt >= fromUtc.Value);
+        if (toUtc.HasValue) q = q.Where(r => r.StartedAt <= toUtc.Value);
+        if (statuses is { Count: > 0 }) q = q.Where(r => statuses.Contains(r.Status));
+        if (taskIds is { Count: > 0 }) q = q.Where(r => taskIds.Contains(r.EtlTaskId));
+
+        if (string.IsNullOrEmpty(errorClassFilter))
+        {
+            // 純 DB 路徑 — 可直接 Skip/Take
+            var total = await q.CountAsync(ct);
+            var items = await q
+                .OrderByDescending(r => r.StartedAt)
+                .Skip((page - 1) * size)
+                .Take(size)
+                .ToListAsync(ct);
+            return (items, total);
+        }
+
+        // errorClass 過濾必須在記憶體端跑（classifier 是純 C# helper）。
+        // 為避免一次拉太多，先撈 ID + Started + Status + ErrorMessage（輕量），
+        // 在記憶體分類後挑出符合的，再分頁取 RunHistory entity。
+        var lite = await q
+            .OrderByDescending(r => r.StartedAt)
+            .Select(r => new { r.Id, r.Status, r.ErrorMessage })
+            .ToListAsync(ct);
+
+        var filteredIds = lite
+            .Where(x => string.Equals(
+                ClassifyOrUnknown(x.ErrorMessage),
+                errorClassFilter,
+                StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Id)
+            .ToList();
+
+        var matchingItems = await _db.RunHistories.AsNoTracking()
+            .Where(r => filteredIds.Contains(r.Id))
+            .OrderByDescending(r => r.StartedAt)
+            .Skip((page - 1) * size)
+            .Take(size)
+            .ToListAsync(ct);
+
+        return (matchingItems, filteredIds.Count);
+    }
+
+    private static string ClassifyOrUnknown(string? errorMessage)
+    {
+        if (string.IsNullOrEmpty(errorMessage)) return "Unknown";
+        return EngineErrorClassifier.Classify(new Exception(errorMessage)).Class.ToString();
+    }
+
+    /// <summary>
     /// 一次撈所有 task 的最近一次 Success run 開始時間。
     /// 用單一 query (group by) 避免 N+1。
     /// 沒成功過的 task 不會在 dict 裡。
