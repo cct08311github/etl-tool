@@ -583,51 +583,197 @@ else
                         }
                         <hr />
                         <div>
-                            <label class="form-label">
-                                🔍 Row 過濾（in-memory，可選）
-                                <span class="badge bg-info text-dark ms-1" style="font-weight: normal">DynamicExpresso</span>
+                            <label class="form-label d-flex justify-content-between align-items-center">
+                                <span>
+                                    🔍 Row 過濾（in-memory，可選）
+                                    <span class="badge bg-info text-dark ms-1" style="font-weight: normal">DynamicExpresso C# 表達式</span>
+                                </span>
+                                @if (!string.IsNullOrWhiteSpace(_task.FileRowFilterExpression))
+                                {
+                                    @if (_filterCompileError is null)
+                                    {
+                                        <span class="badge bg-success">✓ 語法 OK</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-danger" title="@_filterCompileError">✗ 語法錯誤</span>
+                                    }
+                                }
                             </label>
                             <textarea class="form-control font-monospace" rows="2"
-                                      @bind="_task.FileRowFilterExpression"
-                                      placeholder="留空 = 不過濾。例：(int)row[&quot;AMOUNT&quot;] > 1000"></textarea>
-                            <details class="small mt-1">
-                                <summary class="text-primary" style="cursor: pointer">展開：用法、範例、注意事項</summary>
+                                      @bind="_task.FileRowFilterExpression" @bind:after="ValidateFilterSyntax"
+                                      placeholder="留空 = 不過濾（讀全部）。例：(int)row[&quot;AMOUNT&quot;] > 1000"></textarea>
+                            @if (!string.IsNullOrWhiteSpace(_task.FileRowFilterExpression) && _filterCompileError is not null)
+                            {
+                                <div class="alert alert-danger small py-2 mt-1 mb-0">
+                                    <strong>編譯錯誤：</strong> @_filterCompileError
+                                </div>
+                            }
+
+                            <!-- 永遠展開的快速說明（不需要點擊） -->
+                            <div class="alert alert-info small mt-2 mb-0 py-2">
+                                <strong>這個欄位是什麼？</strong>
+                                每從檔案讀進一列 row，<strong>馬上</strong>用此表達式判定。表達式回傳：
+                                <ul class="mb-2 mt-1">
+                                    <li><code>true</code> → 該列照常進入 batch、寫目標、計入 RowsWritten</li>
+                                    <li><code>false</code> → 該列<strong>立刻跳過</strong>，不進 batch、不寫目標、不採樣、不算 RowsRead；RunHistory 多一個 <code>filtered_out=N</code> 欄記跳過幾筆</li>
+                                </ul>
+                                <strong>為什麼 in-memory？</strong>
+                                檔案沒有 SQL 引擎可以「在來源端過濾」，必須先讀進來才能判斷。但因為是 row-by-row 串流判定，
+                                <strong>不會把整個檔載入記憶體再過濾</strong>，跟 DB pushdown 的差別只在「跳過 row 之前已經 IO 進來了一次」。
+                            </div>
+
+                            <!-- 分類範例 -->
+                            <details class="small mt-2" open>
+                                <summary class="text-primary" style="cursor: pointer; font-weight: 600">📋 銀行常見過濾範例（按情境分類）</summary>
                                 <div class="mt-2 p-2 bg-light rounded">
-                                    <p class="mb-2">
-                                        每從檔案讀進一筆 row 立刻判定，false → 跳過，不寫目標、不算入 read/written。
-                                        <strong>檔案 streaming 仍然成立</strong> — 不會把整檔載入再過濾。
-                                    </p>
-                                    <p class="mb-2">
-                                        <strong>上下文：</strong>表達式中 <code>row</code> 為 <code>IDataRecord</code>，
-                                        以欄位名取值：<code>row["欄位名"]</code>（永遠回 <code>object</code>，型別需轉）。
-                                    </p>
-                                    <table class="table table-sm small mb-0">
-                                        <thead>
-                                            <tr><th>意圖</th><th>範例</th></tr>
+                                    <table class="table table-sm small mb-2">
+                                        <thead class="table-light">
+                                            <tr><th style="width: 35%">情境</th><th>表達式</th></tr>
                                         </thead>
                                         <tbody>
-                                            <tr><td>金額大於 1000</td>
-                                                <td><code>(int)row["AMOUNT"] > 1000</code></td></tr>
+                                            <tr class="table-secondary"><td colspan="2"><strong>數值比較</strong>（CSV / FixedWidth 欄位回 string，需轉型；Excel 數值欄位回 double）</td></tr>
+                                            <tr><td>交易金額 &gt; NT$1,000</td>
+                                                <td><code>System.Convert.ToDecimal(row["AMOUNT"]) > 1000m</code></td></tr>
+                                            <tr><td>金額在 1000–10000 之間</td>
+                                                <td><code>System.Convert.ToDecimal(row["AMOUNT"]) &gt;= 1000m &amp;&amp; System.Convert.ToDecimal(row["AMOUNT"]) &lt;= 10000m</code></td></tr>
+                                            <tr><td>整數 ID 大於 1000</td>
+                                                <td><code>System.Convert.ToInt32(row["ID"]) > 1000</code></td></tr>
+
+                                            <tr class="table-secondary"><td colspan="2"><strong>字串條件</strong></td></tr>
                                             <tr><td>地區 = 台北市</td>
                                                 <td><code>(string)row["REGION"] == "台北市"</code></td></tr>
-                                            <tr><td>地區開頭是「台」</td>
-                                                <td><code>((string)row["REGION"]).StartsWith("台")</code></td></tr>
-                                            <tr><td>狀態 ACTIVE 且非空</td>
+                                            <tr><td>地區屬於六都</td>
+                                                <td><code>new[] { "台北市", "新北市", "桃園市", "台中市", "台南市", "高雄市" }.Contains((string)row["REGION"])</code></td></tr>
+                                            <tr><td>產品名稱包含 「VIP」</td>
+                                                <td><code>((string)row["PRODUCT"]).Contains("VIP")</code></td></tr>
+                                            <tr><td>排除測試資料（ID 開頭 TEST_）</td>
+                                                <td><code>!((string)row["ID"]).StartsWith("TEST_")</code></td></tr>
+                                            <tr><td>狀態以 _OK 結尾</td>
+                                                <td><code>((string)row["STATUS"]).EndsWith("_OK")</code></td></tr>
+
+                                            <tr class="table-secondary"><td colspan="2"><strong>Null / 空值處理</strong></td></tr>
+                                            <tr><td>狀態欄位非空且 = ACTIVE</td>
                                                 <td><code>row["STATUS"] != null && (string)row["STATUS"] == "ACTIVE"</code></td></tr>
-                                            <tr><td>多條件 AND</td>
-                                                <td><code>(int)row["AMOUNT"] > 0 && ((string)row["TYPE"]).EndsWith("_OK")</code></td></tr>
-                                            <tr><td>排除特定 ID 範圍</td>
-                                                <td><code>!(((string)row["ID"]).StartsWith("TEST_"))</code></td></tr>
+                                            <tr><td>客戶名稱不為空白</td>
+                                                <td><code>!string.IsNullOrWhiteSpace((string)row["CUSTOMER_NAME"])</code></td></tr>
+                                            <tr><td>備註欄位 null 視為「不要」</td>
+                                                <td><code>row["MEMO"] != null</code></td></tr>
+
+                                            <tr class="table-secondary"><td colspan="2"><strong>日期條件</strong>（Excel 直接是 DateTime；CSV / 文字檔需 parse）</td></tr>
+                                            <tr><td>Excel：交易日期是今天</td>
+                                                <td><code>((System.DateTime)row["TRADE_DATE"]).Date == System.DateTime.Today</code></td></tr>
+                                            <tr><td>CSV：日期欄位 ≥ 2026-01-01</td>
+                                                <td><code>System.DateTime.Parse((string)row["TRADE_DATE"]) >= new System.DateTime(2026, 1, 1)</code></td></tr>
+                                            <tr><td>近 7 日內</td>
+                                                <td><code>System.DateTime.Parse((string)row["TRADE_DATE"]) >= System.DateTime.Today.AddDays(-7)</code></td></tr>
+
+                                            <tr class="table-secondary"><td colspan="2"><strong>金融場景</strong></td></tr>
+                                            <tr><td>反洗錢（AML）— 大額 + 跨境</td>
+                                                <td><code>System.Convert.ToDecimal(row["AMOUNT"]) >= 50000m && (string)row["TYPE"] == "INTL_WIRE"</code></td></tr>
+                                            <tr><td>只匯入有效（非 VOID / CANCELLED）的交易</td>
+                                                <td><code>!new[] { "VOID", "CANCELLED" }.Contains((string)row["STATUS"])</code></td></tr>
+                                            <tr><td>排除測試環境的測試人帳號</td>
+                                                <td><code>row["ACCOUNT"] != null && !((string)row["ACCOUNT"]).StartsWith("TEST")</code></td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
+
+                            <!-- 各檔案格式的型別差異 -->
+                            <details class="small mt-2">
+                                <summary class="text-primary" style="cursor: pointer">⚙ 不同檔案格式的型別對應（轉型參考）</summary>
+                                <div class="mt-2 p-2 bg-light rounded">
+                                    <table class="table table-sm small mb-0">
+                                        <thead class="table-light">
+                                            <tr><th>檔案格式</th><th>欄位實際型別</th><th>處理方式</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td>CSV / DelimitedText / FixedWidth</td>
+                                                <td>所有欄位都是 <code>string</code></td>
+                                                <td>數值要轉：<code>System.Convert.ToInt32(row["X"])</code> 或 <code>(int)int.Parse((string)row["X"])</code><br />
+                                                    日期要 parse：<code>System.DateTime.Parse((string)row["DATE"])</code></td>
+                                            </tr>
+                                            <tr>
+                                                <td>Excel (.xlsx)</td>
+                                                <td>保留原始型別（<code>double</code> / <code>DateTime</code> / <code>string</code> / <code>bool</code>）</td>
+                                                <td>數值直接：<code>(double)row["AMOUNT"] > 1000</code><br />
+                                                    日期直接：<code>((DateTime)row["DATE"]).Year == 2026</code></td>
+                                            </tr>
                                         </tbody>
                                     </table>
                                     <div class="small text-muted mt-2">
-                                        ⚠ 注意事項：
-                                        <ul class="mb-0">
-                                            <li>row 值多半是 <code>string</code>（CSV / 文字檔／FixedWidth）；Excel 數值會是 <code>double</code>，日期是 <code>DateTime</code></li>
-                                            <li>表達式編譯失敗 → 整個 run 直接 fail（不會「靜悄悄略過」）</li>
-                                            <li>每筆 row 評估一次；複雜表達式會稍微拖慢吞吐量</li>
-                                            <li>大量資料量篩選（&gt; 100k 列）建議改用 SQL pushdown — 讓 source 為 DB，用 Filter 模式（form / raw SQL）</li>
-                                        </ul>
+                                        💡 通用寫法：用 <code>System.Convert.ToXXX(row["..."])</code> 系列
+                                        對 string 與原生數值都適用，最不容易踩雷。
+                                    </div>
+                                </div>
+                            </details>
+
+                            <!-- 常見錯誤 + 跟 DB Filter 比較 -->
+                            <details class="small mt-2">
+                                <summary class="text-primary" style="cursor: pointer">⚠ 常見錯誤 / 跟 DB Filter 模式的差別</summary>
+                                <div class="mt-2 p-2 bg-light rounded">
+                                    <p class="mb-2"><strong>常見錯誤</strong></p>
+                                    <table class="table table-sm small mb-3">
+                                        <thead class="table-light">
+                                            <tr><th>寫法</th><th>問題</th><th>修正</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td><code>row["AMOUNT"] > 1000</code></td>
+                                                <td>無法 &gt; 一個 object</td>
+                                                <td><code>System.Convert.ToDecimal(row["AMOUNT"]) > 1000m</code></td>
+                                            </tr>
+                                            <tr>
+                                                <td><code>row["NAME"].Contains("X")</code></td>
+                                                <td>object 沒有 Contains</td>
+                                                <td><code>((string)row["NAME"]).Contains("X")</code></td>
+                                            </tr>
+                                            <tr>
+                                                <td><code>(int)row["ID"]</code>（CSV）</td>
+                                                <td>CSV 是 string，直接 cast 失敗</td>
+                                                <td><code>int.Parse((string)row["ID"])</code> 或 <code>System.Convert.ToInt32(row["ID"])</code></td>
+                                            </tr>
+                                            <tr>
+                                                <td><code>(string)row["X"] == "Y"</code> 但 row["X"] 是 null</td>
+                                                <td>(string)null cast 本身不 throw，<code>== "Y"</code> 結果為 false — 但若改成 <code>((string)row["X"]).Length</code> 之類就 NullRef</td>
+                                                <td>養成習慣：先 null check：<code>row["X"] != null && (string)row["X"] == "Y"</code></td>
+                                            </tr>
+                                            <tr>
+                                                <td><code>(int)row["X"]</code> 但 row["X"] 是 null</td>
+                                                <td>value type cast null 直接 NullReferenceException</td>
+                                                <td>用 <code>System.Convert.ToInt32(row["X"])</code>（null → 0）或先 null check</td>
+                                            </tr>
+                                            <tr>
+                                                <td>用 <code>String.Format</code></td>
+                                                <td>DynamicExpresso 預設 namespace 不含 System.*</td>
+                                                <td>用全名 <code>System.String.Format(...)</code> 或 inline 字串組合</td>
+                                            </tr>
+                                            <tr>
+                                                <td>表達式 throw NullReferenceException</td>
+                                                <td>row[...] 是 null，但你直接 cast string 後呼叫 method</td>
+                                                <td>先 null check：<code>row["X"] != null && ((string)row["X"]).Contains("Y")</code></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+
+                                    <p class="mb-2"><strong>vs. DB Filter 模式</strong></p>
+                                    <table class="table table-sm small mb-0">
+                                        <thead class="table-light">
+                                            <tr><th></th><th>檔案 Row 過濾（這個欄位）</th><th>DB Filter 模式（FilterBuilder / Raw SQL）</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr><td>過濾位置</td><td>應用伺服器（in-memory）</td><td>來源 DB 端（SQL WHERE 推下去）</td></tr>
+                                            <tr><td>是否 streaming</td><td>是（row-by-row 邊讀邊判）</td><td>是（DB 只送回符合的 row）</td></tr>
+                                            <tr><td>網路 / IO 成本</td><td>整檔還是要讀進來；CPU 在應用端</td><td>來源 DB 過濾完才送 row 給應用 — 量大時更省頻寬</td></tr>
+                                            <tr><td>效能</td><td>1M 列以下實務上 OK</td><td>適合超大資料量（10M+）</td></tr>
+                                            <tr><td>語法</td><td>C# 表達式（DynamicExpresso）</td><td>表單 builder 或 raw SQL（依 source provider 文法）</td></tr>
+                                            <tr><td>可用情境</td><td>SourceKind=File（這頁）</td><td>SourceKind=Database</td></tr>
+                                        </tbody>
+                                    </table>
+                                    <div class="small text-muted mt-2">
+                                        💡 規則：「&gt; 100k 列且來源在 DB → 用 DB Filter 推下去；檔案來源 → 沒得選，只能 in-memory，盡量挑短表達式」
                                     </div>
                                 </div>
                             </details>
@@ -1092,25 +1238,169 @@ else
     <div class="card mb-3">
         <div class="card-header">完成後呼叫 Stored Procedure (可選)</div>
         <div class="card-body">
-            <p class="text-muted small mb-3">
-                ETL 寫入完成後在<strong>目標 DB</strong> 呼叫指定的 stored procedure。
-                SP 會收到標準參數：<code>task_id</code>, <code>task_name</code>, <code>run_id</code>, <code>status</code>,
-                <code>rows_read</code>, <code>rows_written</code>, <code>started_at</code>, <code>finished_at</code>,
-                <code>error_message</code>, <code>trigger_type</code>。
-                SP 失敗不會 rollback 已寫入的資料，僅在執行紀錄記下錯誤。
-            </p>
+            <div class="alert alert-info small mb-3 py-2">
+                ETL 在<strong>目標 DB</strong> 上 commit 完成後（成功或失敗），呼叫此 SP。常見用途：
+                <ul class="mb-0 mt-1">
+                    <li>標記下游表「最新一次更新時間」</li>
+                    <li>觸發後續處理（推 Kafka topic / 跑彙總 / 發 email）</li>
+                    <li>寫入監控表給 BI 儀表板用</li>
+                </ul>
+                <strong>SP 失敗不會 rollback 已寫入的資料</strong>，僅在 RunHistory 記下錯誤訊息（所以 SP 設計要 idempotent）。
+            </div>
+
             <div class="row g-3">
                 <div class="col-md-6">
                     <label class="form-label">成功後 SP（schema.name）</label>
-                    <input class="form-control font-monospace" placeholder="例如 dbo.OnEtlSucceeded"
+                    <input class="form-control font-monospace" placeholder="例：dbo.OnEtlSucceeded / HR.LOG_ETL_OK"
                            @bind="_task.PostSuccessSp" />
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">失敗後 SP（schema.name）</label>
-                    <input class="form-control font-monospace" placeholder="例如 dbo.OnEtlFailed"
+                    <input class="form-control font-monospace" placeholder="例：dbo.OnEtlFailed / HR.LOG_ETL_FAIL"
                            @bind="_task.PostFailureSp" />
                 </div>
             </div>
+
+            <details class="small mt-3" open>
+                <summary class="text-primary" style="cursor: pointer; font-weight: 600">📋 SP 參數規格 + SQL Server / Oracle 範例（點擊收合）</summary>
+                <div class="mt-2 p-2 bg-light rounded">
+                    <p class="mb-2"><strong>1. 參數一覽</strong>（呼叫順序固定，命名一律小寫底線；連接器會自動加 <code>@@</code> 或 <code>:</code> 前綴）</p>
+                    <table class="table table-sm small mb-3">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 22%">參數名稱</th>
+                                <th style="width: 18%">型別</th>
+                                <th>說明</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td><code>task_id</code></td><td>NVARCHAR(50) / VARCHAR2(50)</td><td>任務 ID（GUID 字串，例 <code>3f2b...</code>）</td></tr>
+                            <tr><td><code>task_name</code></td><td>NVARCHAR(100) / VARCHAR2(100)</td><td>任務名稱（使用者可讀）</td></tr>
+                            <tr><td><code>run_id</code></td><td>NVARCHAR(50) / VARCHAR2(50)</td><td>本次執行 ID（GUID 字串），可用於關聯 RunHistory 表</td></tr>
+                            <tr><td><code>status</code></td><td>NVARCHAR(16) / VARCHAR2(16)</td><td><code>Success</code> / <code>Failed</code>（字串）</td></tr>
+                            <tr><td><code>rows_read</code></td><td>BIGINT / NUMBER(19)</td><td>讀取筆數（含被 row filter 過濾掉之外的）</td></tr>
+                            <tr><td><code>rows_written</code></td><td>BIGINT / NUMBER(19)</td><td>實際寫入目標表筆數</td></tr>
+                            <tr><td><code>started_at</code></td><td>DATETIME2 / TIMESTAMP</td><td>開始時間（UTC）</td></tr>
+                            <tr><td><code>finished_at</code></td><td>DATETIME2 / TIMESTAMP</td><td>結束時間（UTC）</td></tr>
+                            <tr><td><code>error_message</code></td><td>NVARCHAR(MAX) / CLOB</td><td>錯誤訊息（成功時為空字串或 NULL）</td></tr>
+                            <tr><td><code>trigger_type</code></td><td>NVARCHAR(16) / VARCHAR2(16)</td><td><code>Scheduled</code> / <code>Manual</code> / <code>Retry</code></td></tr>
+                        </tbody>
+                    </table>
+
+                    <p class="mb-2"><strong>2. SQL Server 範例</strong>（@@ 前綴）</p>
+                    <pre class="bg-white p-2 mb-3 rounded border small"><code>CREATE PROCEDURE dbo.OnEtlSucceeded
+    @@task_id        NVARCHAR(50),
+    @@task_name      NVARCHAR(100),
+    @@run_id         NVARCHAR(50),
+    @@status         NVARCHAR(16),
+    @@rows_read      BIGINT,
+    @@rows_written   BIGINT,
+    @@started_at     DATETIME2,
+    @@finished_at    DATETIME2,
+    @@error_message  NVARCHAR(MAX),
+    @@trigger_type   NVARCHAR(16)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- 範例 1：標記下游表最新更新時間
+    UPDATE dbo.EtlMetadata
+       SET LastUpdatedAt   = @@finished_at,
+           LastRunId       = @@run_id,
+           LastRowsWritten = @@rows_written
+     WHERE TaskName = @@task_name;
+
+    -- 範例 2：寫入監控表給 BI 用
+    INSERT INTO dbo.EtlAuditLog
+        (TaskId, TaskName, RunId, Status, RowsRead, RowsWritten,
+         StartedAt, FinishedAt, ErrorMessage, TriggerType)
+    VALUES
+        (@@task_id, @@task_name, @@run_id, @@status, @@rows_read, @@rows_written,
+         @@started_at, @@finished_at, @@error_message, @@trigger_type);
+
+    -- 範例 3：條件式觸發後續處理
+    IF @@rows_written = 0
+    BEGIN
+        -- 0 列警告：發 email / 推 Slack / 寫 alert 表
+        INSERT INTO dbo.EtlEmptyRunAlerts (TaskName, RunId, AtUtc)
+        VALUES (@@task_name, @@run_id, SYSUTCDATETIME());
+    END
+END
+GO</code></pre>
+
+                    <p class="mb-2"><strong>3. Oracle 範例</strong>（: 前綴 — connector 會自動處理；SP 內仍用標準 PL/SQL 語法）</p>
+                    <pre class="bg-white p-2 mb-3 rounded border small"><code>CREATE OR REPLACE PROCEDURE HR.LOG_ETL_OK (
+    p_task_id        IN VARCHAR2,
+    p_task_name      IN VARCHAR2,
+    p_run_id         IN VARCHAR2,
+    p_status         IN VARCHAR2,
+    p_rows_read      IN NUMBER,
+    p_rows_written   IN NUMBER,
+    p_started_at     IN TIMESTAMP,
+    p_finished_at    IN TIMESTAMP,
+    p_error_message  IN CLOB,
+    p_trigger_type   IN VARCHAR2
+)
+AS
+BEGIN
+    -- 範例 1：標記下游表最新更新時間
+    UPDATE HR.ETL_METADATA
+       SET LAST_UPDATED_AT   = p_finished_at,
+           LAST_RUN_ID       = p_run_id,
+           LAST_ROWS_WRITTEN = p_rows_written
+     WHERE TASK_NAME = p_task_name;
+
+    -- 範例 2：寫入監控表
+    INSERT INTO HR.ETL_AUDIT_LOG (
+        TASK_ID, TASK_NAME, RUN_ID, STATUS, ROWS_READ, ROWS_WRITTEN,
+        STARTED_AT, FINISHED_AT, ERROR_MESSAGE, TRIGGER_TYPE)
+    VALUES (
+        p_task_id, p_task_name, p_run_id, p_status, p_rows_read, p_rows_written,
+        p_started_at, p_finished_at, p_error_message, p_trigger_type);
+
+    -- 範例 3：發 dbms_aq 訊息給下游消費者
+    -- DBMS_AQ.ENQUEUE(...) — 視場景接 AQ / Kafka bridge / 通知
+
+    COMMIT;  -- ⚠ 必須 COMMIT；應用端不會 commit 你的 SP 變更
+EXCEPTION
+    WHEN OTHERS THEN
+        -- 不要 RAISE — 否則 connector 會視為 SP 失敗（雖然主 ETL 已 commit）
+        -- 銀行做法：寫個 fallback log 表保留錯誤跡象
+        INSERT INTO HR.ETL_SP_ERROR_LOG (RUN_ID, ERROR_AT, ERROR_TEXT)
+        VALUES (p_run_id, SYSTIMESTAMP, SQLERRM);
+        COMMIT;
+END LOG_ETL_OK;
+/</code></pre>
+
+                    <p class="mb-2"><strong>4. 失敗 SP 範例</strong>（會在 ETL fail 後呼叫）</p>
+                    <pre class="bg-white p-2 mb-3 rounded border small"><code>-- SQL Server
+CREATE PROCEDURE dbo.OnEtlFailed
+    @@task_id NVARCHAR(50), @@task_name NVARCHAR(100), @@run_id NVARCHAR(50),
+    @@status NVARCHAR(16), @@rows_read BIGINT, @@rows_written BIGINT,
+    @@started_at DATETIME2, @@finished_at DATETIME2,
+    @@error_message NVARCHAR(MAX), @@trigger_type NVARCHAR(16)
+AS
+BEGIN
+    -- 寫到監控表 + 觸發外部 email/SMS / Slack 通知
+    INSERT INTO dbo.EtlFailureAlerts (TaskName, RunId, ErrorMessage, AtUtc)
+    VALUES (@@task_name, @@run_id, @@error_message, SYSUTCDATETIME());
+
+    -- 若有 SQL Mail 設定，可呼叫 sp_send_dbmail
+END</code></pre>
+
+                    <div class="alert alert-warning small mb-0 py-2">
+                        <strong>⚠ 注意事項</strong>
+                        <ul class="mb-0">
+                            <li><strong>Schema-qualified 必填</strong>：用 <code>dbo.OnEtlSucceeded</code> 不要只寫 <code>OnEtlSucceeded</code>，避免依賴呼叫者的預設 schema</li>
+                            <li><strong>權限</strong>：執行 ETL 的 DB 帳號必須有此 SP 的 <code>EXECUTE</code> 權限</li>
+                            <li><strong>SP 失敗不會 rollback ETL</strong>：主 transaction 已 commit，SP 是另起一個 connection 呼叫；你的 SP 要自己 commit / handle exception</li>
+                            <li><strong>SP 跑超過 30 秒</strong>：Connector 預設 CommandTimeout = 30 秒；長時間處理請改用 SP 內 enqueue 給 AQ / Service Broker / Kafka 異步處理</li>
+                            <li><strong>Failed 的 ETL 寫入了多少</strong>：<code>rows_written</code> 通常是 <code>0</code>（因為 ETL 失敗 = 整個 transaction rollback）；參考 <code>error_message</code> 看失敗原因</li>
+                            <li><strong>不要在 SP 內動目標 ETL 表</strong>：那張表剛被 ETL 寫滿，可能還有 lock 殘留；改寫 metadata / audit / queue 表</li>
+                        </ul>
+                    </div>
+                </div>
+            </details>
         </div>
     </div>
 
@@ -1278,6 +1568,31 @@ else
     {
         _fileConfig.FixedWidthLayoutJson = System.Text.Json.JsonSerializer.Serialize(_fwColumns);
         UpdateFileConfigJson();
+    }
+
+    // ── File row filter syntax validation ──────────────────────────────
+    // 即時把 textarea 內容餵給 DynamicExpresso 編譯，UI 上以 ✓/✗ badge 顯示
+    private string? _filterCompileError;
+
+    private void ValidateFilterSyntax()
+    {
+        if (string.IsNullOrWhiteSpace(_task.FileRowFilterExpression))
+        {
+            _filterCompileError = null;
+            return;
+        }
+        try
+        {
+            var interp = new DynamicExpresso.Interpreter();
+            // 嘗試 parse 但不執行 — 純語法檢查
+            interp.Parse(_task.FileRowFilterExpression!,
+                new DynamicExpresso.Parameter("row", typeof(System.Data.IDataRecord)));
+            _filterCompileError = null;
+        }
+        catch (Exception ex)
+        {
+            _filterCompileError = ex.Message;
+        }
     }
 
     // ── CSV header auto-suggest state ──────────────────────────────────
@@ -1614,6 +1929,9 @@ else
                 _fwColumns = new();
             }
         }
+
+        // 載入時跑一次語法檢查，使用者一打開就看得到狀態
+        ValidateFilterSyntax();
     }
 
     private async Task OnSourceConnectionChanged(ChangeEventArgs e)

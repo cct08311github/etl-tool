@@ -85,6 +85,22 @@ public static class EtlTaskValidator
             }
         }
 
+        // 檔案模式：檢查 row filter 表達式語法（若有設）— 防止「儲存成功但跑時才炸」
+        if (task.SourceKind == SourceKind.File
+            && !string.IsNullOrWhiteSpace(task.FileRowFilterExpression))
+        {
+            try
+            {
+                var interp = new DynamicExpresso.Interpreter();
+                interp.Parse(task.FileRowFilterExpression!,
+                    new DynamicExpresso.Parameter("row", typeof(System.Data.IDataRecord)));
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Row 過濾表達式語法錯誤：{ex.Message}");
+            }
+        }
+
         if (task.TargetConnectionId == Guid.Empty) errors.Add("請選擇目標連線");
         if (string.IsNullOrEmpty(task.TargetSchema)) errors.Add("請選擇目標 Schema");
         if (string.IsNullOrEmpty(task.TargetTable)) errors.Add("請選擇目標 Table");
