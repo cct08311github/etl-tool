@@ -3,6 +3,7 @@ using System.Security.Claims;
 using EtlTool.App.Auth;
 using EtlTool.Core.Engine;
 using EtlTool.Core.Models;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
@@ -11,18 +12,27 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace EtlTool.App.Pages.Account;
 
+// Skip auto antiforgery validation — we validate manually in OnPostAsync so we
+// can return a friendly form-level error instead of the framework's bare 400
+// "A valid antiforgery token was not provided" page (which silently eats the
+// user's typed credentials and is a UX disaster on stale tabs / key rotation).
+// Security note: still validates manually + cookies are SameSite=Lax, so login
+// CSRF surface is unchanged. We only changed the error path, not the gate.
 [AllowAnonymous]
+[IgnoreAntiforgeryToken]
 public class LoginModel : PageModel
 {
     private readonly UserAuthService _auth;
     private readonly IAuditLogger _audit;
     private readonly LoginLockoutService _lockout;
+    private readonly IAntiforgery _antiforgery;
 
-    public LoginModel(UserAuthService auth, IAuditLogger audit, LoginLockoutService lockout)
+    public LoginModel(UserAuthService auth, IAuditLogger audit, LoginLockoutService lockout, IAntiforgery antiforgery)
     {
         _auth = auth;
         _audit = audit;
         _lockout = lockout;
+        _antiforgery = antiforgery;
     }
 
     [BindProperty, Required] public string Username { get; set; } = "";
@@ -40,6 +50,26 @@ public class LoginModel : PageModel
 
     public async Task<IActionResult> OnPostAsync()
     {
+        // Manual antiforgery validation — see [IgnoreAntiforgeryToken] note above.
+        // 常見失敗成因：登入頁 tab 開太久（token 過期）、伺服器重啟 → data-protection
+        // key 更換、瀏覽器 disabled cookies、跨子網域 cookie 衝突。
+        try
+        {
+            await _antiforgery.ValidateRequestAsync(HttpContext);
+        }
+        catch (AntiforgeryValidationException ex)
+        {
+            await _audit.LogAsync(
+                AuditCategory.Auth, AuditAction.LoginFailed,
+                $"登入頁 antiforgery 驗證失敗（很可能是 tab 開太久或伺服器重啟）：{ex.Message}",
+                actor: string.IsNullOrWhiteSpace(Username) ? "anonymous" : Username,
+                severity: AuditSeverity.Warning);
+            Error = "登入頁面已過期或瀏覽器 cookie 異常。請重新整理（F5）後再試一次。";
+            // 把密碼清掉避免顯示 — 帳號保留方便重打
+            Password = "";
+            return Page();
+        }
+
         if (!ModelState.IsValid)
         {
             Error = "請輸入帳號與密碼";
