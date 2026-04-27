@@ -145,6 +145,21 @@ else
                            placeholder="(留空=用全域 / 0)" @bind="_task.AutoDisableAfterFailures" />
                 </div>
                 <div class="col-12">
+                    <label class="form-label">標籤 (Tags)
+                        <small class="text-muted">逗號分隔；用於 Tasks list 過濾與分類。例：team-finance, daily, critical</small>
+                    </label>
+                    <input class="form-control" maxlength="200" placeholder="例：finance, daily, critical" @bind="_task.Tags" />
+                    @if (!string.IsNullOrWhiteSpace(_task.Tags))
+                    {
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                            @foreach (var tag in (_task.Tags ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Length > 0))
+                            {
+                                <span class="badge bg-secondary">@tag</span>
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="col-12">
                     <label class="form-label">Ops 交接備註
                         <small class="text-muted">業主、on-call、特殊維護程序、相依關係…</small>
                     </label>

@@ -1,10 +1,12 @@
 @page "/tasks"
 @rendermode InteractiveServer
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
 @inject EtlTool.Data.Repositories.ApprovalRepository ApprovalRepo
 @inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo
 @inject EtlTool.Core.Scheduling.SchedulerService Scheduler
 @inject AuthenticationStateProvider AuthState
+@inject NavigationManager NavMgr
 
 <PageTitle>ETL 任務</PageTitle>
 
@@ -152,10 +154,10 @@
     <div class="card mb-3">
         <div class="card-body py-2">
             <div class="row g-2 align-items-center">
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <input class="form-control form-control-sm" placeholder="🔍 任務名稱搜尋…" @bind="_filterName" @bind:after="ApplyFilter" />
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <select class="form-select form-select-sm" @bind="_filterEnabled" @bind:after="ApplyFilter">
                         <option value="">全部狀態</option>
                         <option value="enabled">僅啟用</option>
@@ -163,7 +165,7 @@
                         <option value="autodisabled">僅 auto-disabled</option>
                     </select>
                 </div>
-                <div class="col-md-3">
+                <div class="col-md-2">
                     <select class="form-select form-select-sm" @bind="_filterSla" @bind:after="ApplyFilter">
                         <option value="">全部 SLA</option>
                         <option value="bad">SLA &lt; 95%</option>
@@ -171,8 +173,20 @@
                         <option value="none">尚無資料</option>
                     </select>
                 </div>
-                <div class="col-md-2 text-end small text-muted">
-                    顯示 @(_filtered?.Count ?? 0) / @_items.Count
+                <div class="col-md-2">
+                    <select class="form-select form-select-sm" @bind="_filterConnection" @bind:after="ApplyFilter">
+                        <option value="">全部連線</option>
+                        @foreach (var c in _connections)
+                        {
+                            <option value="@c.Id">@c.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <input class="form-control form-control-sm" placeholder="🏷 標籤過濾" @bind="_filterTag" @bind:after="ApplyFilter" />
+                </div>
+                <div class="col-md-1 text-end small text-muted">
+                    @(_filtered?.Count ?? 0) / @_items.Count
                 </div>
             </div>
         </div>
@@ -449,6 +463,15 @@ else
     private string _filterName = "";
     private string _filterEnabled = "";
     private string _filterSla = "";
+    private string _filterConnection = "";
+    private string _filterTag = "";
+    private List<EtlTool.Core.Models.ConnectionDefinition> _connections = new();
+
+    private void SetTagFilter(string tag)
+    {
+        _filterTag = tag;
+        ApplyFilter();
+    }
 
     private void ApplyFilter()
     {
@@ -473,6 +496,21 @@ else
             "none" => q.Where(t => !_sla.TryGetValue(t.Id, out var s) || s.Total == 0),
             _ => q,
         };
+        if (Guid.TryParse(_filterConnection, out var connId))
+        {
+            q = q.Where(t => t.SourceConnectionId == connId || t.TargetConnectionId == connId);
+        }
+        if (!string.IsNullOrWhiteSpace(_filterTag))
+        {
+            var tagFilter = _filterTag.Trim();
+            q = q.Where(t =>
+            {
+                if (string.IsNullOrEmpty(t.Tags)) return false;
+                var tags = t.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim());
+                return tags.Any(tag => tag.Contains(tagFilter, StringComparison.OrdinalIgnoreCase));
+            });
+        }
         _filtered = q.ToList();
     }
     private Guid? _running;
@@ -497,6 +535,15 @@ else
     {
         var state = await AuthState.GetAuthenticationStateAsync();
         _currentUsername = state.User.Identity?.Name;
+
+        // Read deep-link query param: /tasks?connection=<guid>
+        var uri = new Uri(NavMgr.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("connection", out var connVal))
+            _filterConnection = connVal.ToString();
+        if (query.TryGetValue("tag", out var tagVal))
+            _filterTag = tagVal.ToString();
+
         await Reload();
     }
 
@@ -504,6 +551,7 @@ else
     {
         var ct = CancellationToken.None;
         _items = await TaskRepo.ListLightweightAsync(ct);
+        _connections = await ConnRepo.ListAsync(ct);
         _nextFire.Clear();
         foreach (var t in _items)
         {

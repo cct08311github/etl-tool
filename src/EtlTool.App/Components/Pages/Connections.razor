@@ -153,6 +153,9 @@ else
                     <AuthorizeView Roles="Admin,Operator" Context="ctx">
                         <Authorized>
                             <div class="row-actions">
+                                <a class="icon-btn" title="查看使用此連線的所有任務" href="@($"tasks?connection={c.Id}")">
+                                    <Icon Name="list-checks" />
+                                </a>
                                 <button class="icon-btn" title="立即測試連線"
                                         @onclick="() => QuickTest(c)" disabled="@(_testingId == c.Id)">
                                     @if (_testingId == c.Id) { <Icon Name="loader" /> }

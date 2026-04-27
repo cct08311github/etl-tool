@@ -143,6 +143,13 @@ public class EtlTask
     /// </summary>
     public bool RunOncePerParentSuccess { get; set; }
 
+    /// <summary>
+    /// 自由標籤（逗號分隔，最大 200 字）。常見用途：
+    /// 「team-finance」「daily」「critical」「pii」等分類。
+    /// 顯示為 badge，UI 可依 tag 過濾。
+    /// </summary>
+    public string? Tags { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
