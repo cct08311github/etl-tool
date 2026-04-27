@@ -1,0 +1,193 @@
+@page "/tasks/import"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+@inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
+@inject EtlTool.Core.Scheduling.SchedulerService Scheduler
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Nav
+
+<PageTitle>批次匯入任務 (CSV)</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">批次匯入任務 (CSV)</h1>
+    <a class="btn btn-link" href="tasks">← 返回任務列表</a>
+</div>
+
+<div class="alert alert-info small">
+    上傳 CSV 一次建立多個 ETL 任務。需含 header 欄位（順序無關）：
+    <code>name, source_connection, source_schema, source_table, target_connection, target_schema, target_table, write_mode, cron, enabled, tags</code>
+    <ul class="mb-0 mt-1">
+        <li><code>source_connection</code> / <code>target_connection</code> = 已存在的連線名稱</li>
+        <li><code>write_mode</code> = <code>DeleteInsert</code> 或 <code>Upsert</code></li>
+        <li><code>enabled</code> = <code>true</code> / <code>false</code> / <code>1</code> / <code>0</code> 等（缺省 = true）</li>
+        <li><code>tags</code> 含逗號時請用引號：<code>"daily,critical"</code></li>
+    </ul>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <label class="form-label">CSV 內容 (貼上或上傳)</label>
+        <InputFile OnChange="OnFilePicked" accept=".csv,.txt" class="form-control mb-2" />
+        <textarea class="form-control font-monospace" rows="8" @bind="_csvText" placeholder="@_placeholder"></textarea>
+        <div class="d-flex gap-2 mt-2">
+            <button class="btn btn-primary" @onclick="DryRun" disabled="@_busy">
+                @if (_busy) { <Icon Name="loader" /> <span>處理中…</span> }
+                else { <span>👀 預覽</span> }
+            </button>
+            @if (_parsed is not null && _parsed.OkCount > 0)
+            {
+                <button class="btn btn-success" @onclick="Commit" disabled="@_busy">
+                    💾 確認匯入 (@_parsed.OkCount 個任務)
+                </button>
+            }
+        </div>
+    </div>
+</div>
+
+@if (_message is not null)
+{
+    <div class="alert @(_isError ? "alert-danger" : "alert-success") small">@_message</div>
+}
+
+@if (_parsed is not null)
+{
+    <div class="card">
+        <div class="card-header">
+            預覽結果：<strong class="text-success">@_parsed.OkCount</strong> 可匯入 ／
+            <strong class="text-danger">@_parsed.ErrorCount</strong> 有錯誤
+        </div>
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th style="width:50px">#行</th>
+                    <th style="width:80px">狀態</th>
+                    <th>任務名稱</th>
+                    <th>來源</th>
+                    <th>目標</th>
+                    <th>模式</th>
+                    <th>Cron</th>
+                    <th>錯誤訊息</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _parsed.Rows)
+                {
+                    <tr class="@(r.Ok ? "" : "table-danger")">
+                        <td class="small text-muted">@r.LineNumber</td>
+                        <td>
+                            @if (r.Ok)
+                            {
+                                <span class="badge bg-success">✓</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-danger">✗</span>
+                            }
+                        </td>
+                        <td><code>@r.Name</code></td>
+                        <td class="small text-muted">@r.SourceConnection / @r.SourceSchema.@r.SourceTable</td>
+                        <td class="small text-muted">@r.TargetConnection / @r.TargetSchema.@r.TargetTable</td>
+                        <td><span class="badge @(r.WriteMode == EtlTool.Core.Models.WriteMode.Upsert ? "bg-info" : "bg-primary")">@r.WriteMode</span></td>
+                        <td><code class="small">@r.CronExpression</code></td>
+                        <td class="small text-danger">@(r.Error ?? "")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private string _csvText = "";
+    private EtlTool.Core.Engine.TaskCsvImporter.ImportResult? _parsed;
+    private bool _busy;
+    private string? _message;
+    private bool _isError;
+
+    private string _placeholder = "name,source_connection,source_schema,source_table,target_connection,target_schema,target_table,write_mode,cron,enabled,tags\n" +
+        "OrdersDaily,prod-mssql,dbo,Orders_SRC,prod-oracle,HR,Orders_TGT,DeleteInsert,0 0 2 * * ?,true,\"daily,critical\"";
+
+    private async Task OnFilePicked(Microsoft.AspNetCore.Components.Forms.InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is null) return;
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024); // 5 MB
+            using var reader = new StreamReader(stream);
+            _csvText = await reader.ReadToEndAsync();
+            _message = $"已載入 {file.Name} ({file.Size} bytes)，按「預覽」解析。";
+            _isError = false;
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"讀取失敗：{ex.Message}";
+        }
+    }
+
+    private void DryRun()
+    {
+        _parsed = EtlTool.Core.Engine.TaskCsvImporter.Parse(_csvText ?? "");
+        _message = null;
+        _isError = false;
+    }
+
+    private async Task Commit()
+    {
+        if (_parsed is null || _parsed.OkCount == 0) return;
+        _busy = true;
+        try
+        {
+            var ct = CancellationToken.None;
+            var conns = await ConnRepo.ListAsync(ct);
+            var connByName = conns.ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+
+            var state = await AuthState.GetAuthenticationStateAsync();
+            var actor = state.User.Identity?.Name;
+
+            int created = 0;
+            int failed = 0;
+            var failures = new List<string>();
+            foreach (var r in _parsed.Rows.Where(r => r.Ok))
+            {
+                if (!connByName.TryGetValue(r.SourceConnection, out var sourceConn))
+                {
+                    failed++;
+                    failures.Add($"row {r.LineNumber}: source_connection '{r.SourceConnection}' 不存在");
+                    continue;
+                }
+                if (!connByName.TryGetValue(r.TargetConnection, out var targetConn))
+                {
+                    failed++;
+                    failures.Add($"row {r.LineNumber}: target_connection '{r.TargetConnection}' 不存在");
+                    continue;
+                }
+
+                try
+                {
+                    var task = EtlTool.Core.Engine.TaskCsvImporter.ToEtlTask(r, sourceConn.Id, targetConn.Id);
+                    var saved = await TaskRepo.CreateAsync(task, ct, actor: actor);
+                    await Scheduler.RescheduleAsync(saved.Id, ct);
+                    created++;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    failures.Add($"row {r.LineNumber} ({r.Name}): {ex.Message}");
+                }
+            }
+
+            _isError = failed > 0;
+            _message = $"匯入完成：建立 {created} 個任務" +
+                (failed > 0 ? $"，{failed} 失敗：{string.Join("; ", failures.Take(5))}" : "");
+            _parsed = null;  // 清掉預覽，避免重複按
+            _csvText = "";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
