@@ -160,6 +160,25 @@ builder.Services.AddSingleton<UserAuthService>();
 builder.Services.AddSingleton(builder.Configuration.GetSection("Auth:Lockout").Get<LoginLockoutOptions>() ?? new LoginLockoutOptions());
 builder.Services.AddSingleton<LoginLockoutService>();
 builder.Services.AddSingleton<AdminIpAllowlistService>();
+builder.Services.AddSingleton<ApiKeyAuthService>();
+
+// Rate limiting on /api/* — 60 req/min per IP（保護後端 DB 不被監控腳本打爆）
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("api", httpContext =>
+    {
+        var ip = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+        return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(ip,
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = builder.Configuration.GetValue<int?>("Api:RateLimitPerMinute") ?? 60,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            });
+    });
+});
 builder.Services.AddCascadingAuthenticationState();
 
 // 讀 Auth 設定來決定 cookie ExpireTimeSpan（銀行預設 30 分鐘無操作即逾時）
@@ -230,6 +249,9 @@ app.UseAuthorization();
 // IP allowlist must run **after** authentication so we know if user is Admin,
 // and **before** route execution so 403 is returned before page renders.
 app.UseAdminIpAllowlist();
+// API key check (only impacts /api/*; identity-aware UI paths skip this)
+app.UseApiKeyAuth();
+app.UseRateLimiter();
 app.UseAntiforgery();
 // 靜態資源（CSS / JS / 圖片 / Bootstrap / Inter 字體 fallback 等）必須匿名可達，
 // 否則登入頁本身的樣式會破版且 favicon / blazor.web.js 會被導向回登入頁。
@@ -237,7 +259,9 @@ app.MapStaticAssets().AllowAnonymous();
 app.MapHealthChecks("/healthz").AllowAnonymous();
 
 // Read-only JSON snapshot for external monitoring (Prometheus 已有 /metrics；
-// 此端點提供更細的 per-task 物件結構)。Anonymous + IP allowlist (Account/Api 路徑)。
+// 此端點提供更細的 per-task 物件結構)。
+// Defence-in-depth: AdminIpAllowlist (前面 middleware) + Api:Keys (前面 middleware)
+// + RateLimiter("api") 三層。
 app.MapGet("/api/tasks/last-run", async (HttpContext ctx) =>
 {
     var sp = ctx.RequestServices;
@@ -274,7 +298,7 @@ app.MapGet("/api/tasks/last-run", async (HttpContext ctx) =>
         count = snapshot.Count,
         tasks = snapshot,
     }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-}).AllowAnonymous();
+}).AllowAnonymous().RequireRateLimiting("api");
 
 // 單一 task 的詳細狀態（含最近 10 筆 runs）— monitoring 工具點擊 alert 時 drill-down 用
 app.MapGet("/api/tasks/{taskId:guid}", async (Guid taskId, HttpContext ctx) =>
@@ -335,14 +359,14 @@ app.MapGet("/api/tasks/{taskId:guid}", async (Guid taskId, HttpContext ctx) =>
     ctx.Response.ContentType = "application/json; charset=utf-8";
     await System.Text.Json.JsonSerializer.SerializeAsync(ctx.Response.Body, detail,
         new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-}).AllowAnonymous();
+}).AllowAnonymous().RequireRateLimiting("api");
 
 // /api/health — JSON 版本的 health check（與 /healthz/detail 相同 payload，但 path 風格一致）
 app.MapGet("/api/health", async (HttpContext ctx) =>
 {
     var detail = await EtlTool.App.Services.DetailedHealthCheck.CollectAsync(ctx.RequestServices, ctx.RequestAborted);
     await EtlTool.App.Services.DetailedHealthCheck.WriteJsonAsync(ctx, detail);
-}).AllowAnonymous();
+}).AllowAnonymous().RequireRateLimiting("api");
 // Detailed health JSON — db / quartz / connection monitor / audit write 各 component 細節
 // 給銀行 ops 監控系統解析；簡單的 /healthz 仍保留供 LB / firewall 用
 app.MapGet("/healthz/detail", async (HttpContext ctx) =>
