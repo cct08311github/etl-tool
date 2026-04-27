@@ -337,24 +337,37 @@ else
                             檔案模式：排程觸發時掃描指定目錄符合 glob 的檔，依 mtime 由舊至新處理。每個檔在目標 DB 上獨立 transaction。
                         </div>
                         <div class="mb-2">
-                            <label class="form-label">📂 來源目錄</label>
+                            <label class="form-label">
+                                📂 來源目錄
+                                <span class="badge bg-info text-dark ms-1" style="font-weight: normal">支援日期變數</span>
+                            </label>
                             <input class="form-control font-monospace" @bind="_fileConfig.DirectoryPath"
                                    @bind:after="UpdateFileConfigJson"
                                    placeholder="/data/inbox 或 /data/inbox/${TODAY:yyyy-MM-dd}" />
-                            <small class="text-muted">支援日期變數（見下方檔名 glob 說明）</small>
+                            @if (!string.IsNullOrEmpty(_fileConfig.DirectoryPath) && _fileConfig.DirectoryPath.Contains("${"))
+                            {
+                                <div class="small mt-1">
+                                    <span class="text-muted">展開預覽（以現在時刻 @DateTime.Now.ToString("yyyy-MM-dd HH:mm") 計算）：</span>
+                                    <code class="text-success">@EtlTool.Core.Engine.DateTokenResolver.SubstituteFilePath(_fileConfig.DirectoryPath, DateTime.Now)</code>
+                                </div>
+                            }
                         </div>
                         <div class="row g-2">
                             <div class="col-7">
-                                <label class="form-label">檔名 glob</label>
+                                <label class="form-label">
+                                    檔名 glob
+                                    <span class="badge bg-info text-dark ms-1" style="font-weight: normal">支援日期變數</span>
+                                </label>
                                 <input class="form-control font-monospace" @bind="_fileConfig.GlobPattern"
                                        @bind:after="UpdateFileConfigJson"
                                        placeholder="*.csv / orders_${TODAY:yyyyMMdd}_*.csv" />
-                                <small class="text-muted">
-                                    支援 <code>${TODAY:yyyy-MM-dd}</code> /
-                                    <code>${YESTERDAY:yyyyMMdd}</code> /
-                                    <code>${MONTH_START:yyyy-MM}</code> /
-                                    <code>${DAYS_AGO_3:yyyyMMdd}</code> 等日期變數，排程觸發時即時展開。
-                                </small>
+                                @if (!string.IsNullOrEmpty(_fileConfig.GlobPattern) && _fileConfig.GlobPattern.Contains("${"))
+                                {
+                                    <div class="small mt-1">
+                                        <span class="text-muted">展開預覽：</span>
+                                        <code class="text-success">@EtlTool.Core.Engine.DateTokenResolver.SubstituteFilePath(_fileConfig.GlobPattern, DateTime.Now)</code>
+                                    </div>
+                                }
                             </div>
                             <div class="col-5">
                                 <label class="form-label">每次最多處理</label>
@@ -362,6 +375,55 @@ else
                                        @bind="_fileConfig.MaxFilesPerRun" @bind:after="UpdateFileConfigJson" />
                             </div>
                         </div>
+                        <details class="small mt-2">
+                            <summary class="text-primary" style="cursor: pointer">📅 日期變數一覽（點擊展開）</summary>
+                            <div class="mt-2 p-2 bg-light rounded">
+                                <p class="mb-2 small">
+                                    語法：<code>${TOKEN}</code> 預設展成 <code>yyyy-MM-dd</code>；
+                                    可加 <code>:</code> 指定格式 <code>${TOKEN:yyyyMMdd}</code> /
+                                    <code>${TOKEN:yyyy-MM}</code> 等。基準時刻 = <strong>排程觸發當下</strong>，不是任務建立時。
+                                </p>
+                                <table class="table table-sm small mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 28%">Token</th>
+                                            <th style="width: 32%">說明</th>
+                                            <th>範例（@DateTime.Now.ToString("yyyy-MM-dd") 觸發）</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr><td><code>${TODAY}</code></td><td>今天 0:00</td>
+                                            <td><code>orders_${TODAY:yyyyMMdd}.csv</code> → <code>@($"orders_{DateTime.Now:yyyyMMdd}.csv")</code></td></tr>
+                                        <tr><td><code>${YESTERDAY}</code></td><td>昨天 0:00</td>
+                                            <td><code>${YESTERDAY:yyyy-MM-dd}</code> → <code>@DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd")</code></td></tr>
+                                        <tr><td><code>${TOMORROW}</code></td><td>明天 0:00</td>
+                                            <td>—</td></tr>
+                                        <tr><td><code>${NOW}</code></td><td>觸發瞬間（含時分秒）</td>
+                                            <td><code>${NOW:yyyy-MM-dd_HHmm}</code> → <code>@DateTime.Now.ToString("yyyy-MM-dd_HHmm")</code></td></tr>
+                                        <tr><td><code>${WEEK_START}</code></td><td>本週週一 0:00</td>
+                                            <td>—</td></tr>
+                                        <tr><td><code>${MONTH_START}</code></td><td>本月 1 號 0:00</td>
+                                            <td><code>${MONTH_START:yyyy-MM}</code> → <code>@DateTime.Now.ToString("yyyy-MM")</code></td></tr>
+                                        <tr><td><code>${LAST_MONTH_START}</code></td><td>上月 1 號 0:00</td>
+                                            <td><code>${LAST_MONTH_START:yyyy-MM}</code> → <code>@DateTime.Now.AddMonths(-1).ToString("yyyy-MM")</code></td></tr>
+                                        <tr><td><code>${LAST_MONTH_END}</code></td><td>上月最後一刻</td><td>—</td></tr>
+                                        <tr><td><code>${QUARTER_START}</code></td><td>本季第 1 個月 1 號</td><td>—</td></tr>
+                                        <tr><td><code>${YEAR_START}</code></td><td>今年 1/1 0:00</td>
+                                            <td><code>${YEAR_START:yyyy}</code> → <code>@DateTime.Now.Year</code></td></tr>
+                                        <tr><td><code>${DAYS_AGO_N}</code></td>
+                                            <td>N 天前（N 為任意正整數）</td>
+                                            <td><code>${DAYS_AGO_3:yyyyMMdd}</code> → <code>@DateTime.Now.AddDays(-3).ToString("yyyyMMdd")</code></td></tr>
+                                        <tr><td><code>${WEEKS_AGO_N}</code></td><td>N 週前</td><td>—</td></tr>
+                                        <tr><td><code>${MONTHS_AGO_N}</code></td><td>N 月前</td>
+                                            <td><code>${MONTHS_AGO_6:yyyyMM}</code> → <code>@DateTime.Now.AddMonths(-6).ToString("yyyyMM")</code></td></tr>
+                                    </tbody>
+                                </table>
+                                <div class="small text-muted mt-2">
+                                    💡 完整 token 表（包含 HOUR_START / WTD / YTD / YOY / MoM 等）見
+                                    <code>EtlTool.Core.Engine.DateTokenResolver</code>。Filter / DELETE WHERE 的 raw SQL 也認同樣的 token。
+                                </div>
+                            </div>
+                        </details>
                         <div class="row g-2 mt-2">
                             <div class="col-6">
                                 <label class="form-label">格式</label>
