@@ -120,12 +120,19 @@ public class EtlTask
 
     /// <summary>
     /// 此任務依賴的上游任務 GUID（逗號分隔字串，~13 個 GUID 上限）。
-    /// 排程觸發時：所有 parent 至少需在過去 24 小時內有一次 RunStatus=Success 才會執行；
+    /// 排程觸發時：所有 parent 至少需在過去 N 小時內有一次 RunStatus=Success 才會執行；
     /// 否則跳過並寫 Audit Info「等待上游任務 X 成功」。
     /// 手動觸發 / 重試一律不檢查依賴（admin 知道自己在幹嘛）。
     /// 設計留小：用字串而非 join table，因為一般 ETL 鏈的扇入度低（&lt;= 5）。
     /// </summary>
     public string? DependsOnTaskIds { get; set; }
+
+    /// <summary>
+    /// 依賴 lookback 視窗（小時）。null = 用全域預設 24h。
+    /// 場景：每週批次的 task 需要 168h（7天）才能算「上游 task 本週有跑過」；
+    /// 高頻 task 可能想縮成 6h 確保 freshness。
+    /// </summary>
+    public int? DependencyLookbackHours { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

@@ -148,9 +148,16 @@ else
                     </label>
                     <textarea class="form-control" rows="2" maxlength="2000" placeholder="例：業主 alice@bank；on-call bob@bank；02-04 維護需先停 task" @bind="_task.Notes"></textarea>
                 </div>
+                <div class="col-md-3">
+                    <label class="form-label">依賴 Lookback (小時)
+                        <small class="text-muted" title="parent 必須在過去 N 小時內有 Success；留空 = 24h">(覆寫)</small>
+                    </label>
+                    <input class="form-control" type="number" min="1" max="720"
+                           placeholder="(留空=24h)" @bind="_task.DependencyLookbackHours" />
+                </div>
                 <div class="col-12">
                     <label class="form-label">上游任務依賴 (DependsOn)
-                        <small class="text-muted">需排程觸發前確認以下任務「過去 24h 內成功」；手動觸發 / 重試一律不檢查</small>
+                        <small class="text-muted">需排程觸發前確認以下任務「過去 lookback 內成功」；手動觸發 / 重試一律不檢查</small>
                     </label>
                     @if (_connections is null || _allTasks is null)
                     {
@@ -180,6 +187,20 @@ else
                         }
                     }
                 </div>
+                @if (_downstreamTasks.Count > 0)
+                {
+                    <div class="col-12">
+                        <label class="form-label">下游任務（依賴此任務的）
+                            <small class="text-muted">刪除 / 停用此任務前請確認下游影響</small>
+                        </label>
+                        <div class="d-flex flex-wrap gap-1">
+                            @foreach (var d in _downstreamTasks)
+                            {
+                                <a href="@($"tasks/{d.Id}")" class="badge bg-info text-dark text-decoration-none">@d.Name</a>
+                            }
+                        </div>
+                    </div>
+                }
             </div>
             @if (Id is not null)
             {
@@ -640,6 +661,7 @@ else
     private string? _currentUsername;
     private List<EtlTool.Core.Models.EtlTask>? _allTasks;
     private HashSet<Guid> _selectedDependsOn = new();
+    private List<EtlTool.Core.Models.EtlTask> _downstreamTasks = new();
 
     private void ToggleDependency(Guid parentId, bool include)
     {
@@ -763,6 +785,12 @@ else
             // Hydrate _selectedDependsOn from stored CSV
             _selectedDependsOn = EtlTool.Core.Engine.TaskDependencyChecker
                 .ParseDependsOnIds(_task.DependsOnTaskIds).ToHashSet();
+            // 反向找：哪些 task 把我列為 parent
+            _downstreamTasks = (_allTasks ?? new())
+                .Where(t => t.Id != _task.Id
+                    && EtlTool.Core.Engine.TaskDependencyChecker
+                        .ParseDependsOnIds(t.DependsOnTaskIds).Contains(_task.Id))
+                .ToList();
             await ReloadSourceMetadata();
             await ReloadTargetMetadata();
         }

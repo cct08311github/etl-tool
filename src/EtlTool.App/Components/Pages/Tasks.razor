@@ -13,9 +13,14 @@
     <div class="d-flex gap-2">
         <AuthorizeView Roles="Admin,Operator">
             <Authorized>
-                <a class="btn btn-outline-secondary" href="/Account/TaskGraphDot" target="_blank" title="下載 Graphviz DOT 格式（可貼到 https://dreampuf.github.io/GraphvizOnline 視覺化）">
-                    <Icon Name="external-link" /> 依賴圖 DOT
-                </a>
+                <div class="btn-group" role="group">
+                    <a class="btn btn-outline-secondary" href="/Account/TaskGraphDot?format=dot" target="_blank" title="下載 Graphviz DOT 格式（可貼到 https://dreampuf.github.io/GraphvizOnline 視覺化）">
+                        <Icon Name="external-link" /> DOT
+                    </a>
+                    <a class="btn btn-outline-secondary" href="/Account/TaskGraphDot?format=mermaid" target="_blank" title="下載 Mermaid 格式（可貼到 GitHub / GitLab / Obsidian markdown 直接顯示）">
+                        Mermaid
+                    </a>
+                </div>
             </Authorized>
         </AuthorizeView>
         <AuthorizeView Roles="Admin">

@@ -115,8 +115,9 @@ public sealed class EtlJob : IJob
                 try
                 {
                     var lastSuccess = await _runSink.LastSuccessByTaskAsync(context.CancellationToken);
+                    var lookback = (task.DependencyLookbackHours is { } h && h > 0) ? h : 24;
                     var depResult = TaskDependencyChecker.CheckDependencies(
-                        deps, lastSuccess, DateTime.UtcNow, lookbackHours: 24);
+                        deps, lastSuccess, DateTime.UtcNow, lookbackHours: lookback);
                     if (!depResult.AllSatisfied)
                     {
                         _log.LogInformation("Skipping {TaskName} — dependency unmet: {Reason}",
