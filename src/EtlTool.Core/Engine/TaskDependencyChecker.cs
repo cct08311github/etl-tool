@@ -33,6 +33,74 @@ public static class TaskDependencyChecker
     /// 檢查依賴。lookbackHours：parent 必須在過去 N 小時內有 Success；預設 24h。
     /// lookbackHours &lt;= 0 → 視為「any time」（曾經成功過即可）。
     /// </summary>
+    public sealed record CycleDetectionResult(
+        bool HasCycle,
+        IReadOnlyList<Guid>? CyclePath,
+        string? Reason);
+
+    /// <summary>
+    /// 偵測是否「為 candidateTaskId 加上這些 parents」會造成循環。
+    /// allTaskDeps：所有現存 task 的 deps（含 candidate 自己若已存在）。
+    /// 用 DFS 檢查每個 newParent 是否能反向走回 candidateTaskId。
+    ///
+    /// 簡化規則：
+    ///   - 若 newParent == candidateTaskId → self-loop（直接 cycle）
+    ///   - 從 newParent 出發走 allTaskDeps，若到達 candidateTaskId → cycle
+    /// 回傳路徑供 UI 顯示「A→B→C→A」。
+    /// </summary>
+    public static CycleDetectionResult DetectCycle(
+        Guid candidateTaskId,
+        IReadOnlyList<Guid> newDependsOnIds,
+        IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> allTaskDeps)
+    {
+        foreach (var newParent in newDependsOnIds)
+        {
+            if (newParent == candidateTaskId)
+            {
+                return new CycleDetectionResult(true,
+                    new[] { candidateTaskId, candidateTaskId },
+                    "任務不可依賴自己");
+            }
+
+            // DFS：從 newParent 沿 allTaskDeps 走，看能否到達 candidateTaskId
+            var path = new List<Guid> { newParent };
+            var visited = new HashSet<Guid> { newParent };
+            if (DfsReaches(newParent, candidateTaskId, allTaskDeps, visited, path))
+            {
+                // path 從 newParent 走到 candidateTaskId
+                // 完整 cycle = candidateTaskId → newParent → ... → candidateTaskId
+                var fullCycle = new List<Guid> { candidateTaskId };
+                fullCycle.AddRange(path);
+                return new CycleDetectionResult(true, fullCycle,
+                    $"加上此依賴會形成循環：{string.Join(" → ", fullCycle)}");
+            }
+        }
+        return new CycleDetectionResult(false, null, null);
+    }
+
+    private static bool DfsReaches(
+        Guid current,
+        Guid target,
+        IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> allDeps,
+        HashSet<Guid> visited,
+        List<Guid> path)
+    {
+        if (!allDeps.TryGetValue(current, out var deps)) return false;
+        foreach (var d in deps)
+        {
+            if (d == target)
+            {
+                path.Add(d);
+                return true;
+            }
+            if (!visited.Add(d)) continue;
+            path.Add(d);
+            if (DfsReaches(d, target, allDeps, visited, path)) return true;
+            path.RemoveAt(path.Count - 1);
+        }
+        return false;
+    }
+
     public static DependencyCheckResult CheckDependencies(
         IReadOnlyList<Guid> dependsOnIds,
         IReadOnlyDictionary<Guid, DateTime> lastSuccessByTask,

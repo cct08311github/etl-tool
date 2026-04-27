@@ -11,6 +11,13 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">ETL 任務</h1>
     <div class="d-flex gap-2">
+        <AuthorizeView Roles="Admin,Operator">
+            <Authorized>
+                <a class="btn btn-outline-secondary" href="/Account/TaskGraphDot" target="_blank" title="下載 Graphviz DOT 格式（可貼到 https://dreampuf.github.io/GraphvizOnline 視覺化）">
+                    <Icon Name="external-link" /> 依賴圖 DOT
+                </a>
+            </Authorized>
+        </AuthorizeView>
         <AuthorizeView Roles="Admin">
             <Authorized>
                 @if (_items is not null && _items.Any(t => !t.Enabled))
@@ -175,6 +182,16 @@ else
             <tr>
                 <td>
                     <a href="@($"tasks/{t.Id}")" class="fw-medium">@t.Name</a>
+                    @{
+                        var parentIds = EtlTool.Core.Engine.TaskDependencyChecker.ParseDependsOnIds(t.DependsOnTaskIds);
+                    }
+                    @if (parentIds.Count > 0)
+                    {
+                        var parentNames = parentIds
+                            .Select(pid => _items!.FirstOrDefault(x => x.Id == pid)?.Name ?? pid.ToString()[..8])
+                            .ToList();
+                        <span class="badge bg-info text-dark ms-2 border" title="@($"上游任務：{string.Join("、", parentNames)}")" style="cursor:help">↑ @parentIds.Count</span>
+                    }
                     @if (!string.IsNullOrEmpty(t.Notes))
                     {
                         <span class="badge bg-light text-dark ms-2 border" title="@t.Notes" style="cursor:help">📝</span>

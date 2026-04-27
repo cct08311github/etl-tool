@@ -926,6 +926,25 @@ else
             return;
         }
 
+        // 循環依賴檢查：避免 admin 不小心把 A → B → A 設成循環導致排程永遠等下去
+        if (_selectedDependsOn.Count > 0 && _allTasks is not null)
+        {
+            var allDeps = _allTasks
+                .Where(t => t.Id != _task.Id)  // 不要包含自己舊版本
+                .ToDictionary(
+                    t => t.Id,
+                    t => (IReadOnlyList<Guid>)EtlTool.Core.Engine.TaskDependencyChecker
+                        .ParseDependsOnIds(t.DependsOnTaskIds).ToList());
+            var cycle = EtlTool.Core.Engine.TaskDependencyChecker.DetectCycle(
+                _task.Id, _selectedDependsOn.ToList(), allDeps);
+            if (cycle.HasCycle)
+            {
+                _validationErrors = new() { cycle.Reason ?? "依賴設定形成循環" };
+                _message = null;
+                return;
+            }
+        }
+
         // PII + MaskSamplePayload 建議：偵測映射欄位是否含 PII，若有且 mask 未開
         // → 顯示 modal 詢問是否啟用。Admin 確認過後，無論選哪個都繼續儲存。
         if (!_piiCheckPassed && !_task.MaskSamplePayload && _task.Mappings.Count > 0)
