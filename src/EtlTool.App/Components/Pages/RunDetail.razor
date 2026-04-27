@@ -1,7 +1,9 @@
 @page "/runs/{Id:guid}"
 @rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
 @inject EtlTool.Data.Repositories.RunHistoryRepository RunRepo
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
+@inject EtlTool.Data.AppDbContext Db
 
 <PageTitle>執行詳情</PageTitle>
 
@@ -18,6 +20,7 @@ else
         <div class="card-body">
             <table class="kv-table">
                 <tr><th>任務</th><td><a href="@($"tasks/{_run.EtlTaskId}")">@(_taskName ?? _run.EtlTaskId.ToString())</a></td></tr>
+                <tr><th>Run Id</th><td><code>@_run.Id</code></td></tr>
                 <tr><th>開始時間</th><td><span class="font-monospace">@_run.StartedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</span></td></tr>
                 <tr><th>結束時間</th><td><span class="font-monospace">@(_run.FinishedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—")</span></td></tr>
                 <tr><th>耗時</th><td>@(_run.FinishedAt is null ? "—" : (_run.FinishedAt.Value - _run.StartedAt).ToString(@"hh\:mm\:ss"))</td></tr>
@@ -29,6 +32,43 @@ else
         </div>
     </div>
 
+    @* 對應的 audit log 入口（依時間 + targetId 配對；通常 RunSucceeded / RunFailed 會落在這裡） *@
+    @if (_relatedAudits is not null && _relatedAudits.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">關聯稽核事件 (@_relatedAudits.Count)</div>
+            <table class="table mb-0 small align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 160px">At (UTC)</th>
+                        <th style="width: 120px">Action</th>
+                        <th>Message</th>
+                        <th style="width: 100px">Severity</th>
+                        <th style="width: 70px">Hash</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var a in _relatedAudits)
+                {
+                    <tr>
+                        <td class="font-monospace text-muted">@a.At.ToString("MM-dd HH:mm:ss")</td>
+                        <td><span class="text-muted">@a.Action</span></td>
+                        <td>@a.Message</td>
+                        <td><SeverityBadge Severity="@a.Severity" /></td>
+                        <td>
+                            <code class="small text-muted" title="@a.Hash">@(a.Hash is null ? "—" : a.Hash[..8])</code>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+            <div class="card-footer small text-muted">
+                以 hash 串接的稽核鏈紀錄；
+                <a href="/logs">活動日誌</a> 內可驗證完整性。
+            </div>
+        </div>
+    }
+
     @if (!string.IsNullOrEmpty(_run.ErrorMessage))
     {
         <div class="card mb-3 border-danger">
@@ -36,6 +76,43 @@ else
             <div class="card-body">
                 <pre class="mb-0">@_run.ErrorMessage</pre>
             </div>
+        </div>
+    }
+
+    @* Schema drift visualization：若這個 run 的 task 有快照，顯示與目前實際 schema 的對照 *@
+    @if (_schemaSnapshot is not null && _schemaSnapshot.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-header">來源 schema 快照（這次 run 對照基準）</div>
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>欄位名</th>
+                        <th>型別 (snapshot)</th>
+                        <th>Nullable</th>
+                        <th>PII?</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var c in _schemaSnapshot)
+                {
+                    var pii = EtlTool.Core.Engine.PiiDetector.Inspect(c.Name);
+                    <tr>
+                        <td><code>@c.Name</code></td>
+                        <td><code class="small text-muted">@c.DataType</code></td>
+                        <td class="small text-muted">@(c.Nullable ? "yes" : "no")</td>
+                        <td>
+                            @if (pii.Kind != EtlTool.Core.Engine.PiiDetector.PiiKind.None)
+                            {
+                                <span class="badge bg-warning text-dark" title="@pii.Reason">
+                                    🔒 @EtlTool.Core.Engine.PiiDetector.KindLabel(pii.Kind)
+                                </span>
+                            }
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
         </div>
     }
 
@@ -74,15 +151,36 @@ else
     [Parameter] public Guid Id { get; set; }
     private EtlTool.Core.Models.RunHistory? _run;
     private string? _taskName;
+    private List<EtlTool.Core.Models.AuditEvent>? _relatedAudits;
+    private List<EtlTool.Core.Models.ColumnInfo>? _schemaSnapshot;
 
     protected override async Task OnInitializedAsync()
     {
         var ct = CancellationToken.None;
         _run = await RunRepo.GetAsync(Id, ct);
-        if (_run is not null)
+        if (_run is null) return;
+
+        var t = await TaskRepo.GetWithMappingsAsync(_run.EtlTaskId, ct);
+        _taskName = t?.Name;
+
+        // 找 audit events：targetId == taskId AND At in [run.StartedAt - 5s, run.FinishedAt + 5s]
+        var fromUtc = _run.StartedAt.AddSeconds(-5);
+        var toUtc = (_run.FinishedAt ?? DateTime.UtcNow).AddSeconds(5);
+        _relatedAudits = await Db.AuditEvents
+            .AsNoTracking()
+            .Where(e => e.TargetId == _run.EtlTaskId && e.At >= fromUtc && e.At <= toUtc)
+            .OrderBy(e => e.At)
+            .ToListAsync(ct);
+
+        // schema snapshot 解析（如果有的話）
+        if (t is not null && !string.IsNullOrEmpty(t.SourceSchemaSnapshotJson))
         {
-            var t = await TaskRepo.GetWithMappingsAsync(_run.EtlTaskId, ct);
-            _taskName = t?.Name;
+            try
+            {
+                _schemaSnapshot = System.Text.Json.JsonSerializer
+                    .Deserialize<List<EtlTool.Core.Models.ColumnInfo>>(t.SourceSchemaSnapshotJson);
+            }
+            catch { /* 解析失敗就不顯示 */ }
         }
     }
 }

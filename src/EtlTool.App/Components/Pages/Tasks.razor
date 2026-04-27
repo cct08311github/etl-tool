@@ -90,6 +90,29 @@
                         }
                         ，並重新註冊 Quartz scheduler。
                     </p>
+                    @if (_bulkEnable)
+                    {
+                        var autoDisabledInScope = _items?.Where(t => !t.Enabled && t.AutoDisabledAt is not null).ToList() ?? new();
+                        if (autoDisabledInScope.Count > 0)
+                        {
+                            <div class="alert alert-warning small mb-2">
+                                <strong>⚠ @autoDisabledInScope.Count 個任務是 auto-disabled，將被跳過。</strong>
+                                <ul class="mb-0 mt-1">
+                                    @foreach (var t in autoDisabledInScope.Take(8))
+                                    {
+                                        <li><code>@t.Name</code> — @t.AutoDisabledReason</li>
+                                    }
+                                </ul>
+                                @if (autoDisabledInScope.Count > 8)
+                                {
+                                    <div class="text-muted mt-1">…還有 @(autoDisabledInScope.Count - 8) 個</div>
+                                }
+                                <div class="text-muted mt-1">
+                                    請至列表逐筆走「我已確認問題已修復」確認流程。
+                                </div>
+                            </div>
+                        }
+                    }
                     <p class="small text-muted">每筆變更都會寫進 audit log。執行中的任務不會被中斷，僅影響未來觸發。</p>
                     <label class="form-label">操作理由（建議填寫）</label>
                     <textarea class="form-control" rows="2" @bind="_bulkReason" placeholder="例：來源 DB 維護期間"></textarea>
@@ -371,6 +394,16 @@ else
         {
             var ct = CancellationToken.None;
             var targets = _items.Where(t => t.Enabled != _bulkEnable).ToList();
+
+            // 批次「啟用」時，跳過 auto-disabled 任務（避免無腦把壞掉的 task 重新打開）
+            // — admin 必須走逐筆 re-enable 確認流程
+            var skipped = new List<EtlTool.Core.Models.EtlTask>();
+            if (_bulkEnable)
+            {
+                skipped = targets.Where(t => t.AutoDisabledAt is not null).ToList();
+                targets = targets.Where(t => t.AutoDisabledAt is null).ToList();
+            }
+
             int changed = 0;
             foreach (var t in targets)
             {
@@ -383,8 +416,15 @@ else
             }
             _showBulk = false;
             _isError = false;
-            _message = $"批次{(_bulkEnable ? "啟用" : "停用")}已套用，共 {changed} 個任務" +
-                       (string.IsNullOrWhiteSpace(_bulkReason) ? "" : $"（理由：{_bulkReason}）");
+            var msg = $"批次{(_bulkEnable ? "啟用" : "停用")}已套用，共 {changed} 個任務";
+            if (skipped.Count > 0)
+            {
+                msg += $"。略過 {skipped.Count} 個 auto-disabled 任務（請逐筆走 re-enable 確認）：" +
+                       string.Join("、", skipped.Take(5).Select(t => t.Name)) +
+                       (skipped.Count > 5 ? $" …+{skipped.Count - 5}" : "");
+            }
+            if (!string.IsNullOrWhiteSpace(_bulkReason)) msg += $"（理由：{_bulkReason}）";
+            _message = msg;
             await Reload();
         }
         catch (Exception ex)

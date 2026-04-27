@@ -132,11 +132,28 @@ else
         <div class="card-body">
             <textarea rows="3" class="form-control font-monospace"
                       readonly="@(!_advancedMode)"
-                      @bind="_form.ConnectionString"></textarea>
+                      @bind="_form.ConnectionString" @bind:after="UpdateStrengthMeter"></textarea>
             @if (Id is not null && !_advancedMode)
             {
                 <small class="text-muted">編輯模式下若 Password 留空則不變更。</small>
             }
+
+            @{
+                var (strengthLabel, strengthColor, strengthDetail) = ComputeStrength(_form.ConnectionString);
+            }
+            <div class="mt-2">
+                <div class="d-flex justify-content-between align-items-center small">
+                    <span>密碼強度 / 風險檢測</span>
+                    <span class="badge" style="background:@strengthColor; color: white">@strengthLabel</span>
+                </div>
+                <div style="height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; margin-top: 4px">
+                    <div style="height: 100%; width: @(StrengthBarWidth(strengthLabel)); background: @strengthColor; transition: width .15s, background .15s"></div>
+                </div>
+                @if (!string.IsNullOrEmpty(strengthDetail))
+                {
+                    <small class="text-muted d-block mt-1">@strengthDetail</small>
+                }
+            </div>
         </div>
     </div>
 
@@ -201,6 +218,47 @@ else
     private EtlTool.Core.Engine.WeakCredentialDetector.DetectionResult? _weakWarn;
     private bool _weakBlocking;
     private bool _confirmedDespiteWarn;
+
+    private void UpdateStrengthMeter() { /* @bind:after triggers re-render */ }
+
+    /// <summary>
+    /// 即時把連線字串丟進 WeakCredentialDetector，回傳 (label, color, detail) 給 UI 渲染。
+    /// 純讀；不寫 audit、不阻斷。
+    /// </summary>
+    private (string Label, string Color, string Detail) ComputeStrength(string? cs)
+    {
+        if (string.IsNullOrWhiteSpace(cs))
+            return ("—", "#9ca3af", "尚未輸入");
+        var det = EtlTool.Core.Engine.WeakCredentialDetector.Inspect(cs);
+        return det.Kind switch
+        {
+            EtlTool.Core.Engine.WeakCredentialKind.None
+                => ("強", "#059669", "未發現常見弱密碼或 sample 帳密"),
+            EtlTool.Core.Engine.WeakCredentialKind.TooShort
+                => ("弱：太短", "#f59e0b", det.Detail ?? "密碼長度不足"),
+            EtlTool.Core.Engine.WeakCredentialKind.AllDigits
+                => ("弱：純數字", "#f59e0b", det.Detail ?? "密碼僅含數字"),
+            EtlTool.Core.Engine.WeakCredentialKind.UserEqualsPassword
+                => ("極弱：user==pwd", "#dc2626", det.Detail ?? ""),
+            EtlTool.Core.Engine.WeakCredentialKind.CommonWeakPassword
+                => ("極弱：常見弱密碼", "#dc2626", det.Detail ?? ""),
+            EtlTool.Core.Engine.WeakCredentialKind.KnownDevPair
+                => ("極弱：dev sample 帳密", "#dc2626", det.Detail ?? ""),
+            EtlTool.Core.Engine.WeakCredentialKind.EmptyPassword
+                => ("缺密碼", "#9ca3af", det.Detail ?? ""),
+            _ => ("?", "#9ca3af", det.Detail ?? ""),
+        };
+    }
+
+    private static string StrengthBarWidth(string label) => label switch
+    {
+        "—" => "0%",
+        "缺密碼" => "10%",
+        "弱：太短" or "弱：純數字" => "40%",
+        "極弱：user==pwd" or "極弱：常見弱密碼" or "極弱：dev sample 帳密" => "70%",
+        "強" => "100%",
+        _ => "0%",
+    };
 
     private EtlTool.Connectors.OracleParts _ora = EtlTool.Connectors.ConnectionStringHelper.DefaultOracle();
     private EtlTool.Connectors.SqlServerParts _sql = EtlTool.Connectors.ConnectionStringHelper.DefaultSqlServer();
