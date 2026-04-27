@@ -163,6 +163,7 @@ else
                 <th>排程</th>
                 <th>下次執行</th>
                 <th>上次成功</th>
+                <th>上次失敗</th>
                 <th>啟用</th>
                 <th class="text-end">操作</th>
             </tr>
@@ -197,6 +198,52 @@ else
                     @(_nextFire.TryGetValue(t.Id, out var n) && n.HasValue
                         ? n.Value.ToLocalTime().ToString("MM-dd HH:mm")
                         : "—")
+                </td>
+                <td class="small">
+                    @if (_lastSuccess.TryGetValue(t.Id, out var ls))
+                    {
+                        var ageHours = (DateTime.UtcNow - ls).TotalHours;
+                        var ageDays = (int)(ageHours / 24);
+                        if (ageHours < 24)
+                        {
+                            <span class="text-success" title="@ls.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")">@ls.ToLocalTime().ToString("HH:mm")</span>
+                        }
+                        else if (ageDays <= 7)
+                        {
+                            <span class="badge bg-warning text-dark" title="@ls.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")">@ageDays 天前</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-danger" title="@ls.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")">⚠ @ageDays 天前</span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="text-muted">尚未成功</span>
+                    }
+                </td>
+                <td class="small">
+                    @if (_lastFailure.TryGetValue(t.Id, out var lf))
+                    {
+                        var fAgeHours = (DateTime.UtcNow - lf).TotalHours;
+                        var fAgeDays = (int)(fAgeHours / 24);
+                        if (fAgeHours < 24)
+                        {
+                            <span class="badge bg-danger" title="@lf.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")">@lf.ToLocalTime().ToString("HH:mm")</span>
+                        }
+                        else if (fAgeDays <= 7)
+                        {
+                            <span class="badge bg-warning text-dark" title="@lf.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")">@fAgeDays 天前</span>
+                        }
+                        else
+                        {
+                            <span class="text-muted" title="@lf.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")">@fAgeDays 天前</span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="text-muted">—</span>
+                    }
                 </td>
                 <td>
                     <AuthorizeView Roles="Admin,Operator" Context="ctx">
@@ -270,6 +317,7 @@ else
     private List<EtlTool.Core.Models.EtlTask>? _items;
     private Dictionary<Guid, DateTimeOffset?> _nextFire = new();
     private Dictionary<Guid, DateTime> _lastSuccess = new();
+    private Dictionary<Guid, DateTime> _lastFailure = new();
     private HashSet<Guid> _pendingTargets = new();
     private Guid? _running;
     private string? _currentUsername;
@@ -307,6 +355,7 @@ else
             catch { _nextFire[t.Id] = null; }
         }
         _lastSuccess = await RunHistoryRepo.LastSuccessByTaskAsync(ct);
+        _lastFailure = await RunHistoryRepo.LastFailureByTaskAsync(ct);
         var pending = await ApprovalRepo.ListPendingAsync(ct);
         _pendingTargets = pending
             .Where(p => p.Action == ApprovalAction.DeleteTask)

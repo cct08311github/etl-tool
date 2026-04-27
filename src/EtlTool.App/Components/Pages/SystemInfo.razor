@@ -10,6 +10,7 @@
 @inject EtlTool.App.Services.HttpFailureNotifier WebhookNotifier
 @inject EtlTool.Core.Engine.IAuditLogger AuditLogger
 @inject AuthenticationStateProvider AuthStateProvider
+@inject Microsoft.Extensions.Options.IOptionsMonitor<EtlTool.Core.Scheduling.MaintenanceWindowsOptions> MaintOpts
 
 <PageTitle>系統資訊</PageTitle>
 
@@ -130,6 +131,65 @@ else
                 </td></tr>
             </tbody>
         </table>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">維護視窗 (Maintenance Windows)</div>
+        @{
+            var maintOpts = MaintOpts.CurrentValue;
+            var nowLocal = DateTime.Now;
+            var activeNow = maintOpts.CurrentlyActive(nowLocal);
+        }
+        @if (activeNow is not null)
+        {
+            <div class="alert alert-warning m-3 mb-0 small">
+                <strong>⏸ 目前正在維護視窗中</strong> — @(activeNow.Reason ?? "(未提供原因)")，
+                所有排程觸發的 ETL 都會 skip；手動觸發仍允許。
+            </div>
+        }
+        @if (maintOpts.Windows.Count == 0)
+        {
+            <div class="card-body small text-muted">
+                未設定任何維護視窗（Maintenance:Windows 為空）。
+                如需設定，編輯 appsettings.json 後重啟（IOptionsMonitor 也支援 file watch 熱載）。
+            </div>
+        }
+        else
+        {
+            <table class="table mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 25%">天</th>
+                        <th style="width: 12%">起</th>
+                        <th style="width: 12%">迄</th>
+                        <th>原因</th>
+                        <th style="width: 12%">目前狀態</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var w in maintOpts.Windows)
+                    {
+                        var isActive = w.IsActive(nowLocal);
+                        <tr>
+                            <td><code class="small">@(w.Days.Length == 0 ? "(空)" : string.Join(", ", w.Days))</code></td>
+                            <td><code>@w.From</code></td>
+                            <td><code>@w.To</code></td>
+                            <td class="small">@(w.Reason ?? "—")</td>
+                            <td>
+                                @if (isActive)
+                                {
+                                    <span class="badge bg-warning text-dark">⏸ 進行中</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-light text-dark">未啟動</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
     </div>
 
     <div class="alert alert-info small mb-0">

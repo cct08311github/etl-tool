@@ -2,47 +2,48 @@
     [Parameter] public string Value { get; set; } = "0 0 * * * ?";
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
 
-    private static readonly (string Label, string Cron)[] Presets =
+    /// <summary>
+    /// 銀行常見排程模板。每筆 (label, cron, hint)。
+    /// hint 給 admin 額外脈絡（建議使用情境）。
+    /// </summary>
+    private static readonly (string Label, string Cron, string Hint)[] Presets =
     {
-        ("每 5 分鐘", "0 0/5 * * * ?"),
-        ("每小時整點", "0 0 * * * ?"),
-        ("每天 02:00", "0 0 2 * * ?"),
-        ("每週一 03:00", "0 0 3 ? * MON"),
-        ("自訂", ""),
+        ("每分鐘",        "0 * * * * ?",       "高頻（測試 / 開發用，正式環境少見）"),
+        ("每 5 分鐘",     "0 0/5 * * * ?",     "近即時 — 帳務 reconcile / cache 更新"),
+        ("每 10 分鐘",    "0 0/10 * * * ?",    "輕量同步"),
+        ("每 30 分鐘",    "0 0/30 * * * ?",    "中頻同步"),
+        ("每小時整點",    "0 0 * * * ?",       "每小時一次"),
+        ("每天 02:00",    "0 0 2 * * ?",       "離峰時段 — 多數 ETL 適用"),
+        ("每天 06:00",    "0 0 6 * * ?",       "上班前完成"),
+        ("每天 22:00",    "0 0 22 * * ?",      "晚間批次"),
+        ("每週一 03:00",  "0 0 3 ? * MON",     "週一收盤後彙整"),
+        ("每週日 03:00",  "0 0 3 ? * SUN",     "週末維護"),
+        ("每月 1 號 02:00", "0 0 2 1 * ?",     "月結 / 月度報表"),
     };
 
-    private string _selectedPreset = "";
     private string? _nextFireDescription;
+    private string? _validationError;
 
-    protected override void OnParametersSet()
+    protected override void OnParametersSet() => ComputeNext();
+
+    private async Task ApplyPreset(string cron)
     {
-        _selectedPreset = Presets.FirstOrDefault(p => p.Cron == Value).Cron ?? "";
+        Value = cron;
+        await ValueChanged.InvokeAsync(cron);
         ComputeNext();
-    }
-
-    private async Task OnPresetChange(ChangeEventArgs e)
-    {
-        var v = (string)e.Value!;
-        _selectedPreset = v;
-        if (!string.IsNullOrEmpty(v))
-        {
-            Value = v;
-            await ValueChanged.InvokeAsync(v);
-            ComputeNext();
-        }
     }
 
     private async Task OnCustomChange(ChangeEventArgs e)
     {
         var v = (string)e.Value!;
         Value = v;
-        _selectedPreset = "";
         await ValueChanged.InvokeAsync(v);
         ComputeNext();
     }
 
     private void ComputeNext()
     {
+        _validationError = null;
         try
         {
             var expr = new Quartz.CronExpression(Value);
@@ -51,23 +52,37 @@
         }
         catch (Exception ex)
         {
-            _nextFireDescription = $"無效：{ex.Message}";
+            _nextFireDescription = null;
+            _validationError = ex.Message;
         }
     }
+
+    private bool IsActivePreset(string cron) => string.Equals(Value?.Trim(), cron, StringComparison.Ordinal);
 }
 
 <div class="mb-2">
-    <label class="form-label">預設排程</label>
-    <select class="form-select" value="@_selectedPreset" @onchange="OnPresetChange">
-        <option value="">— 選擇預設或自訂 —</option>
-        @foreach (var p in Presets.Where(p => !string.IsNullOrEmpty(p.Cron)))
+    <label class="form-label">常用排程</label>
+    <div class="d-flex flex-wrap gap-1">
+        @foreach (var p in Presets)
         {
-            <option value="@p.Cron">@p.Label (@p.Cron)</option>
+            <button type="button"
+                    class="btn btn-sm @(IsActivePreset(p.Cron) ? "btn-primary" : "btn-outline-secondary")"
+                    title="@p.Hint"
+                    @onclick="() => ApplyPreset(p.Cron)">
+                @p.Label
+            </button>
         }
-    </select>
+    </div>
 </div>
 <div class="mb-2">
     <label class="form-label">Cron 表達式 (Quartz 格式：秒 分 時 日 月 週)</label>
     <input class="form-control font-monospace" value="@Value" @onchange="OnCustomChange" />
-    <small class="text-muted">下次觸發 (本地)：@(_nextFireDescription ?? "—")</small>
+    @if (_validationError is not null)
+    {
+        <small class="text-danger">⚠ Cron 無效：@_validationError</small>
+    }
+    else
+    {
+        <small class="text-muted">下次觸發 (本地)：@(_nextFireDescription ?? "—")</small>
+    }
 </div>

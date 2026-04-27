@@ -66,6 +66,21 @@ public sealed class RunHistoryRepository : IRunHistorySink
         return grouped.ToDictionary(x => x.TaskId, x => x.LastAt);
     }
 
+    /// <summary>
+    /// 同 LastSuccessByTaskAsync 但抓 Failed runs。給 Tasks list 顯示「上次失敗」用。
+    /// 沒失敗過的 task 不會在 dict 裡。
+    /// </summary>
+    public async Task<Dictionary<Guid, DateTime>> LastFailureByTaskAsync(CancellationToken ct)
+    {
+        var grouped = await _db.RunHistories
+            .AsNoTracking()
+            .Where(r => r.Status == RunStatus.Failed)
+            .GroupBy(r => r.EtlTaskId)
+            .Select(g => new { TaskId = g.Key, LastAt = g.Max(r => r.StartedAt) })
+            .ToListAsync(ct);
+        return grouped.ToDictionary(x => x.TaskId, x => x.LastAt);
+    }
+
     /// <summary>清理單一 task 超出保留筆數的舊紀錄。</summary>
     public async Task PurgeOldAsync(Guid taskId, CancellationToken ct)
     {
