@@ -102,6 +102,15 @@ public class EtlTask
     /// </summary>
     public int? AutoDisableAfterFailures { get; set; }
 
+    /// <summary>
+    /// 由 circuit-breaker 觸發 auto-disable 的時間（UTC）。null = 不是 auto-disable
+    /// 或已被 admin 手動重新啟用後清除。配合 AutoDisabledReason 給 UI 顯示前因後果。
+    /// </summary>
+    public DateTime? AutoDisabledAt { get; set; }
+
+    /// <summary>auto-disable 的原因（人類可讀，含失敗次數與最後錯誤摘要）。</summary>
+    public string? AutoDisabledReason { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

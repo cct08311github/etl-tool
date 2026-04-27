@@ -37,6 +37,38 @@
     </div>
 </div>
 
+@if (_showReEnable && _reEnableTask is not null)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">⛔ 此任務已被 circuit-breaker 自動停用</h5>
+                </div>
+                <div class="modal-body">
+                    <p>
+                        任務 <strong>@_reEnableTask.Name</strong> 在
+                        <code>@_reEnableTask.AutoDisabledAt?.ToLocalTime():yyyy-MM-dd HH:mm</code>
+                        被系統自動停用。
+                    </p>
+                    @if (!string.IsNullOrEmpty(_reEnableTask.AutoDisabledReason))
+                    {
+                        <div class="alert alert-warning small">
+                            <strong>原因：</strong> @_reEnableTask.AutoDisabledReason
+                        </div>
+                    }
+                    <p>請先確認問題已修復（連線、資料來源、過濾條件等），再啟用此任務。</p>
+                    <p class="small text-muted">啟用後將清除 auto-disabled 標記並重新加入 scheduler。</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showReEnable = false">取消</button>
+                    <button class="btn btn-warning" @onclick="ConfirmReEnable">我已確認問題已修復，啟用</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @if (_showBulk)
 {
     <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
@@ -122,6 +154,12 @@ else
                     {
                         <span class="badge bg-warning text-dark ms-2" title="此任務已有待覆核的刪除請求">待覆核刪除</span>
                     }
+                    @if (t.AutoDisabledAt is not null)
+                    {
+                        <span class="badge bg-danger ms-2" title="@($"自動停用於 {t.AutoDisabledAt.Value.ToLocalTime():yyyy-MM-dd HH:mm}\n{t.AutoDisabledReason}")">
+                            ⛔ 已自動停用
+                        </span>
+                    }
                 </td>
                 <td>
                     <code class="text-muted">@t.SourceSchema.@t.SourceTable</code>
@@ -142,7 +180,7 @@ else
                         <Authorized>
                             <div class="form-check form-switch m-0">
                                 <input type="checkbox" class="form-check-input" checked="@t.Enabled"
-                                       @onchange="e => ToggleEnabled(t, (bool)e.Value!)" />
+                                       @onchange="e => OnEnableToggle(t, (bool)e.Value!)" />
                             </div>
                         </Authorized>
                         <NotAuthorized>
@@ -225,6 +263,9 @@ else
     private bool _bulkBusy;
     private string _bulkReason = "";
 
+    private bool _showReEnable;
+    private EtlTool.Core.Models.EtlTask? _reEnableTask;
+
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthState.GetAuthenticationStateAsync();
@@ -250,7 +291,21 @@ else
             .ToHashSet();
     }
 
-    private async Task ToggleEnabled(EtlTool.Core.Models.EtlTask task, bool enabled)
+    private async Task OnEnableToggle(EtlTool.Core.Models.EtlTask task, bool enabled)
+    {
+        // 從 disabled 變回 enabled，且是 auto-disabled → 走 confirm 流程；其他直接執行
+        if (enabled && task.AutoDisabledAt is not null)
+        {
+            _reEnableTask = task;
+            _showReEnable = true;
+            // 把 UI 開關 revert 回 false（因為實際還沒套用）— 用 StateHasChanged 重繪
+            StateHasChanged();
+            return;
+        }
+        await ApplyEnable(task, enabled);
+    }
+
+    private async Task ApplyEnable(EtlTool.Core.Models.EtlTask task, bool enabled)
     {
         task.Enabled = enabled;
         var full = await TaskRepo.GetWithMappingsAsync(task.Id, CancellationToken.None);
@@ -259,6 +314,17 @@ else
         await TaskRepo.UpdateAsync(full, CancellationToken.None, actor: _currentUsername);
         await Scheduler.RescheduleAsync(task.Id, CancellationToken.None);
         await Reload();
+    }
+
+    private async Task ConfirmReEnable()
+    {
+        if (_reEnableTask is null) return;
+        var t = _reEnableTask;
+        _showReEnable = false;
+        _reEnableTask = null;
+        await ApplyEnable(t, true);
+        _isError = false;
+        _message = $"任務「{t.Name}」已重新啟用，auto-disable 標記已清除。";
     }
 
     private async Task RunNow(Guid id)

@@ -22,6 +22,40 @@
     }
 </div>
 
+@if (_showPiiSuggest)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-warning">
+                    <h5 class="modal-title">🔒 偵測到可能 PII 欄位 — 是否同時啟用 Mask？</h5>
+                </div>
+                <div class="modal-body">
+                    <p>以下來源欄位疑似含 PII（個人識別資料）：</p>
+                    <ul class="small">
+                        @foreach (var c in _piiSuggestColumns)
+                        {
+                            <li><code>@c</code></li>
+                        }
+                    </ul>
+                    <p>
+                        若不啟用 <strong>MaskSamplePayload</strong>，每次執行的前 5 筆 sample 會以
+                        <em>原始值</em> 寫入 RunHistory，admin 在 /runs 詳情頁就能看到實際資料。
+                    </p>
+                    <p class="small text-muted">
+                        建議啟用：sample 仍會寫入但 PII 欄位會被 ***（保留原 schema 與筆數可供 debug）。
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="() => _showPiiSuggest = false">取消儲存</button>
+                    <button class="btn btn-link" @onclick="SaveWithoutMask">不啟用，仍要儲存</button>
+                    <button class="btn btn-warning" @onclick="EnableMaskAndSave">啟用 mask 並儲存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @if (_task is null || _connections is null)
 {
     <p>載入中...</p>
@@ -526,6 +560,27 @@ else
 
     private string? _currentUsername;
 
+    // PII mask 建議流程
+    private bool _showPiiSuggest;
+    private bool _piiCheckPassed;
+    private List<string> _piiSuggestColumns = new();
+
+    private async Task EnableMaskAndSave()
+    {
+        if (_task is null) return;
+        _task.MaskSamplePayload = true;
+        _showPiiSuggest = false;
+        _piiCheckPassed = true;
+        await Save();
+    }
+
+    private async Task SaveWithoutMask()
+    {
+        _showPiiSuggest = false;
+        _piiCheckPassed = true;  // 已 acknowledge，不再 prompt
+        await Save();
+    }
+
     private void ClearSchemaSnapshot()
     {
         if (_task is null) return;
@@ -713,6 +768,25 @@ else
         {
             _message = null;
             return;
+        }
+
+        // PII + MaskSamplePayload 建議：偵測映射欄位是否含 PII，若有且 mask 未開
+        // → 顯示 modal 詢問是否啟用。Admin 確認過後，無論選哪個都繼續儲存。
+        if (!_piiCheckPassed && !_task.MaskSamplePayload && _task.Mappings.Count > 0)
+        {
+            var piiCols = _task.Mappings
+                .Where(m => !string.IsNullOrEmpty(m.SourceColumn))
+                .Select(m => (col: m.SourceColumn,
+                              det: EtlTool.Core.Engine.PiiDetector.Inspect(m.SourceColumn)))
+                .Where(x => x.det.Kind != EtlTool.Core.Engine.PiiDetector.PiiKind.None)
+                .ToList();
+            if (piiCols.Count > 0)
+            {
+                _piiSuggestColumns = piiCols.Select(x =>
+                    $"{x.col} ({EtlTool.Core.Engine.PiiDetector.KindLabel(x.det.Kind)})").ToList();
+                _showPiiSuggest = true;
+                return;  // 等 modal 決定
+            }
         }
 
         // 捕捉 schema 快照（用使用者選表時已載入的欄位資訊）

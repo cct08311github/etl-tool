@@ -53,10 +53,19 @@ public sealed class DefaultCircuitBreakerEnforcer : ICircuitBreakerEnforcer
 
             if (!CircuitBreaker.ShouldDisable(recent, threshold)) return;
 
-            // Trip：把 task 設為 Disabled + audit + 從 scheduler 移除
+            // Trip：把 task 設為 Disabled + 標記 AutoDisabled* + audit + 從 scheduler 移除
             var t = await db.EtlTasks.FirstOrDefaultAsync(x => x.Id == task.Id, ct);
             if (t is null || !t.Enabled) return;  // 可能已被別人 disabled
+
+            var now = DateTime.UtcNow;
+            // 取最後一筆失敗的 ErrorMessage 摘要（截斷給 reason）
+            var lastError = recent.FirstOrDefault()?.ErrorMessage;
+            var reason = $"連續 {threshold} 次失敗於 {now:yyyy-MM-dd HH:mm}Z" +
+                         (string.IsNullOrEmpty(lastError) ? "" : $" — 最後錯誤：{Truncate(lastError, 200)}");
+
             t.Enabled = false;
+            t.AutoDisabledAt = now;
+            t.AutoDisabledReason = reason;
             await db.SaveChangesAsync(ct);
 
             await scheduler.UnscheduleAsync(task.Id, ct);
@@ -76,4 +85,7 @@ public sealed class DefaultCircuitBreakerEnforcer : ICircuitBreakerEnforcer
             _log.LogError(ex, "CircuitBreakerEnforcer failed for task {TaskId}; task remains enabled", task.Id);
         }
     }
+
+    private static string Truncate(string s, int max)
+        => s.Length <= max ? s : s[..max] + "…";
 }

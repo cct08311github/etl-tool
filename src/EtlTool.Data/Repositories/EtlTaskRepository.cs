@@ -97,6 +97,15 @@ public sealed class EtlTaskRepository : IEtlTaskLookup, IAllEtlTasksProvider
         existing.RunHistoryRetentionRuns = task.RunHistoryRetentionRuns;
         existing.MaxRunMinutes = task.MaxRunMinutes;
         existing.AutoDisableAfterFailures = task.AutoDisableAfterFailures;
+
+        // 若這次 update 把 task 從 disabled 變回 enabled，且之前是 auto-disable 狀態，
+        // 清掉 AutoDisabled 標記 — admin 確認過、決定重新啟用，狀態回到「正常 enabled」。
+        if (task.Enabled && existing.AutoDisabledAt is not null)
+        {
+            existing.AutoDisabledAt = null;
+            existing.AutoDisabledReason = null;
+        }
+
         existing.UpdatedAt = DateTime.UtcNow;
 
         // 用 ExecuteDeleteAsync 直接下 SQL DELETE，繞過 change tracker
