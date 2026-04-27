@@ -39,6 +39,9 @@
                         <Icon Name="pause" /> 批次停用所有
                     </button>
                 }
+                <button class="btn btn-outline-secondary" @onclick="OpenTagRename" title="跨所有任務批次重新命名一個 tag">
+                    🏷 重新命名 tag
+                </button>
             </Authorized>
         </AuthorizeView>
         <AuthorizeView Roles="Admin,Operator">
@@ -50,6 +53,50 @@
         </AuthorizeView>
     </div>
 </div>
+
+@if (_showTagRename)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header"><h5 class="modal-title">🏷 全域 tag 重新命名</h5></div>
+                <div class="modal-body">
+                    <p class="small text-muted">
+                        把指定 tag 重新命名 / 合併到另一個 tag。所有受影響的任務會走 EtlTaskRepository.UpdateAsync，
+                        生成 EntityChangeHistory + audit。輸入新值為空 → 等於刪除此 tag。
+                    </p>
+                    <div class="mb-2">
+                        <label class="form-label">舊 tag 名稱</label>
+                        <select class="form-select" @bind="_renameOldTag">
+                            <option value="">— 選擇要重新命名的 tag —</option>
+                            @foreach (var tag in _allTagsInUse)
+                            {
+                                var count = _items?.Count(t => HasTag(t, tag)) ?? 0;
+                                <option value="@tag">@tag (@count 個任務使用)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">新 tag 名稱（留空 = 刪除此 tag）</label>
+                        <input class="form-control" placeholder="(留空 = 刪除)" @bind="_renameNewTag" />
+                    </div>
+                    @if (_renameError is not null)
+                    {
+                        <div class="alert alert-danger small">@_renameError</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showTagRename = false" disabled="@_renameBusy">取消</button>
+                    <button class="btn btn-primary" @onclick="ConfirmTagRename"
+                            disabled="@(_renameBusy || string.IsNullOrEmpty(_renameOldTag))">
+                        @if (_renameBusy) { <Icon Name="loader" /> <span>處理中…</span> }
+                        else { <span>確認</span> }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @if (_showReEnable && _reEnableTask is not null)
 {
@@ -518,6 +565,34 @@ else
         ApplyFilter();
     }
 
+    /// <summary>
+    /// 把 5 個 filter 變數 reflect 到 URL query string。空值不寫；NavigationManager
+    /// 用 replaceHistoryEntry=true 避免每次 typing 都 push 新 history entry。
+    /// </summary>
+    private void UpdateUrlFromFilters()
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(_filterName))
+            query.Add("name=" + Uri.EscapeDataString(_filterName));
+        if (!string.IsNullOrEmpty(_filterEnabled))
+            query.Add("status=" + Uri.EscapeDataString(_filterEnabled));
+        if (!string.IsNullOrEmpty(_filterSla))
+            query.Add("sla=" + Uri.EscapeDataString(_filterSla));
+        if (!string.IsNullOrEmpty(_filterConnection))
+            query.Add("connection=" + Uri.EscapeDataString(_filterConnection));
+        if (!string.IsNullOrWhiteSpace(_filterTag))
+            query.Add("tag=" + Uri.EscapeDataString(_filterTag));
+
+        var newPath = "tasks" + (query.Count > 0 ? "?" + string.Join("&", query) : "");
+        var current = new Uri(NavMgr.Uri);
+        var currentRel = current.PathAndQuery.TrimStart('/');
+        if (!string.Equals(currentRel, newPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // replaceHistoryEntry=true so back-button jumps to /tasks (not every keystroke)
+            NavMgr.NavigateTo(newPath, forceLoad: false, replace: true);
+        }
+    }
+
     private void ClearFilter(string which)
     {
         switch (which)
@@ -539,6 +614,10 @@ else
 
     private void ApplyFilter()
     {
+        // 同步當前 filter state 到 URL query string —
+        // admin 可以複製 URL 給同事 / 加入書籤，回到原本的篩選結果。
+        UpdateUrlFromFilters();
+
         if (_items is null) { _filtered = null; return; }
         IEnumerable<EtlTool.Core.Models.EtlTask> q = _items;
         if (!string.IsNullOrWhiteSpace(_filterName))
@@ -595,18 +674,106 @@ else
     private bool _showReEnable;
     private EtlTool.Core.Models.EtlTask? _reEnableTask;
 
+    // Global tag rename
+    private bool _showTagRename;
+    private bool _renameBusy;
+    private string _renameOldTag = "";
+    private string _renameNewTag = "";
+    private string? _renameError;
+    private List<string> _allTagsInUse = new();
+
+    private void OpenTagRename()
+    {
+        _renameOldTag = "";
+        _renameNewTag = "";
+        _renameError = null;
+        _allTagsInUse = (_items ?? new())
+            .Where(t => !string.IsNullOrEmpty(t.Tags))
+            .SelectMany(t => t.Tags!.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s)
+            .ToList();
+        _showTagRename = true;
+    }
+
+    private static bool HasTag(EtlTool.Core.Models.EtlTask t, string tag)
+    {
+        if (string.IsNullOrEmpty(t.Tags)) return false;
+        return t.Tags.Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Any(s => string.Equals(s.Trim(), tag, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task ConfirmTagRename()
+    {
+        if (string.IsNullOrEmpty(_renameOldTag) || _items is null || _currentUsername is null) return;
+        var oldTag = _renameOldTag.Trim();
+        var newTag = _renameNewTag.Trim();
+
+        // Sanity: new tag can't contain comma (would split into multiple tags unexpectedly)
+        if (newTag.Contains(','))
+        {
+            _renameError = "新 tag 不可含逗號";
+            return;
+        }
+
+        _renameBusy = true;
+        _renameError = null;
+        try
+        {
+            var ct = CancellationToken.None;
+            var affected = _items.Where(t => HasTag(t, oldTag)).ToList();
+            int changed = 0;
+            foreach (var t in affected)
+            {
+                var full = await TaskRepo.GetWithMappingsAsync(t.Id, ct);
+                if (full is null) continue;
+                // 重新組合 tags：移除 oldTag，加入 newTag（若 newTag 非空且尚未存在）
+                var tags = (full.Tags ?? "")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
+                    .Where(s => s.Length > 0 && !string.Equals(s, oldTag, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (!string.IsNullOrEmpty(newTag) &&
+                    !tags.Any(s => string.Equals(s, newTag, StringComparison.OrdinalIgnoreCase)))
+                {
+                    tags.Add(newTag);
+                }
+                full.Tags = tags.Count == 0 ? null : string.Join(",", tags);
+                await TaskRepo.UpdateAsync(full, ct, actor: _currentUsername);
+                changed++;
+            }
+            _showTagRename = false;
+            _isError = false;
+            _message = string.IsNullOrEmpty(newTag)
+                ? $"已從 {changed} 個任務移除 tag「{oldTag}」"
+                : $"已將 {changed} 個任務的 tag「{oldTag}」改為「{newTag}」";
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _renameError = ex.Message;
+        }
+        finally
+        {
+            _renameBusy = false;
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         var state = await AuthState.GetAuthenticationStateAsync();
         _currentUsername = state.User.Identity?.Name;
 
-        // Read deep-link query param: /tasks?connection=<guid>
+        // Read deep-link query params — supports name / status / sla / connection / tag
         var uri = new Uri(NavMgr.Uri);
         var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
-        if (query.TryGetValue("connection", out var connVal))
-            _filterConnection = connVal.ToString();
-        if (query.TryGetValue("tag", out var tagVal))
-            _filterTag = tagVal.ToString();
+        if (query.TryGetValue("name", out var nameVal)) _filterName = nameVal.ToString();
+        if (query.TryGetValue("status", out var statusVal)) _filterEnabled = statusVal.ToString();
+        if (query.TryGetValue("sla", out var slaVal)) _filterSla = slaVal.ToString();
+        if (query.TryGetValue("connection", out var connVal)) _filterConnection = connVal.ToString();
+        if (query.TryGetValue("tag", out var tagVal)) _filterTag = tagVal.ToString();
 
         await Reload();
     }
