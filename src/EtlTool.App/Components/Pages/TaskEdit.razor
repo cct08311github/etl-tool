@@ -574,7 +574,13 @@ else
     </div>
 
     <div class="card mb-3">
-        <div class="card-header">排程</div>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>排程</span>
+            <a href="/scheduler/preview" target="_blank" class="btn btn-sm btn-link p-0"
+               title="開新分頁顯示未來 24h 所有任務觸發點 + 自動偵測同表寫入衝突 / 同來源連線壓力">
+                ↗ 開排程預覽 (檢查衝突)
+            </a>
+        </div>
         <div class="card-body">
             <CronEditor Value="@_task.CronExpression" ValueChanged="@(v => _task.CronExpression = v)" />
         </div>

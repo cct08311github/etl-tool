@@ -1,0 +1,65 @@
+# Docker build context exclusions
+#
+# Without this file, `docker build` sends the ENTIRE working tree to the daemon
+# — including bin/, obj/, runtime data/, log files, IDE caches. With a busy
+# build agent, that often exceeds 1 GB and adds 10+ seconds per build before
+# any layer cache check. Keeping this file lean costs nothing and makes
+# rebuilds noticeably snappier.
+
+# Build artifacts
+**/bin/
+**/obj/
+**/out/
+publish/
+artifacts/
+
+# Runtime data — NEVER copy SQLite DB or logs into the image
+**/data/
+**/logs/
+**/keys/
+*.db
+*.db-shm
+*.db-wal
+
+# Test outputs
+**/TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# IDE / OS / VCS
+.vs/
+.vscode/
+.idea/
+*.user
+*.swp
+.DS_Store
+Thumbs.db
+*.pidb
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Docker meta (don't recurse)
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+docker-compose*.yaml
+
+# Plans / scratch / docs
+.claude/
+*.local.md
+LICENSE
+README.md
+
+# Secrets — defense in depth (real secrets should never be in repo, but if
+# someone accidentally drops one, this stops it leaking into the image)
+*.pem
+*.key
+*.pfx
+secrets/
+.env
+.env.*
+appsettings.Local.json
+appsettings.*.local.json

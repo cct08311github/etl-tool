@@ -61,6 +61,27 @@ else if (_fires.Count == 0)
 }
 else
 {
+    @if (_conflicts is not null && _conflicts.Count > 0)
+    {
+        <div class="alert alert-warning small mb-2">
+            <strong>⚠ 偵測到 @_conflicts.Count 個排程衝突</strong>
+            <ul class="mb-0 mt-1">
+                @foreach (var c in _conflicts.Take(10))
+                {
+                    <li>
+                        <span class="badge @(c.Kind == EtlTool.Core.Scheduling.ScheduleConflictAnalyzer.ConflictKind.SameTargetCollision ? "bg-danger" : "bg-warning text-dark")">
+                            @EtlTool.Core.Scheduling.ScheduleConflictAnalyzer.KindLabel(c.Kind)
+                        </span>
+                        <span class="ms-1">@c.Description</span>
+                    </li>
+                }
+                @if (_conflicts.Count > 10)
+                {
+                    <li class="text-muted">…以及另外 @(_conflicts.Count - 10) 個（精簡顯示前 10）</li>
+                }
+            </ul>
+        </div>
+    }
     <div class="alert alert-info small">
         共 @_fires.Count 次觸發 / @_taskCount 個獨立任務。
         ⚠ 上游依賴未必滿足（顯示為 「等候上游」），實際執行時 EtlJob 會再次驗證。
@@ -114,6 +135,7 @@ else
     private record FireEntry(Guid TaskId, string TaskName, string? Tags, DateTime FireAt, string Cron, string? CronHuman, string DepStatus, string? DepDetail);
     private List<FireEntry>? _fires;
     private int _taskCount;
+    private IReadOnlyList<EtlTool.Core.Scheduling.ScheduleConflictAnalyzer.Conflict>? _conflicts;
 
     private bool _showMermaid;
     private string _mermaidText = "";
@@ -203,6 +225,11 @@ else
 
         _fires = fires.OrderBy(f => f.FireAt).ToList();
         _taskCount = _fires.Select(f => f.TaskId).Distinct().Count();
+
+        // Schedule conflict analysis（不打 DB；用同一份 task 清單，windowHours 跟 UI 同）
+        _conflicts = EtlTool.Core.Scheduling.ScheduleConflictAnalyzer.Analyze(
+            tasks, nowLocal, windowHours: _hoursAhead);
+
         StateHasChanged();
     }
 }
