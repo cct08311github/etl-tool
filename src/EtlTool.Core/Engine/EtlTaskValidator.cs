@@ -15,14 +15,47 @@ public static class EtlTaskValidator
         if (string.IsNullOrWhiteSpace(task.Name))
             errors.Add("任務名稱不可為空");
 
-        if (task.SourceConnectionId == Guid.Empty) errors.Add("請選擇來源連線");
-        if (string.IsNullOrEmpty(task.SourceSchema)) errors.Add("請選擇來源 Schema");
-        if (string.IsNullOrEmpty(task.SourceTable)) errors.Add("請選擇來源 Table");
+        // Source 驗證 — 依 SourceKind 分流
+        if (task.SourceKind == SourceKind.Database)
+        {
+            if (task.SourceConnectionId == Guid.Empty) errors.Add("請選擇來源連線");
+            if (string.IsNullOrEmpty(task.SourceSchema)) errors.Add("請選擇來源 Schema");
+            if (string.IsNullOrEmpty(task.SourceTable)) errors.Add("請選擇來源 Table");
+        }
+        else  // SourceKind.File
+        {
+            if (string.IsNullOrEmpty(task.FileSourceConfigJson))
+                errors.Add("檔案模式下尚未設定來源檔案參數");
+            else
+            {
+                FileSourceConfig? cfg = null;
+                try { cfg = System.Text.Json.JsonSerializer.Deserialize<FileSourceConfig>(task.FileSourceConfigJson); }
+                catch { errors.Add("FileSourceConfigJson 解析失敗（資料異常）"); }
+
+                if (cfg is not null)
+                {
+                    if (string.IsNullOrWhiteSpace(cfg.DirectoryPath)) errors.Add("檔案模式：請填來源目錄");
+                    if (string.IsNullOrWhiteSpace(cfg.GlobPattern)) errors.Add("檔案模式：請填檔名 glob 樣式");
+                    if (cfg.PostAction == FilePostAction.Archive
+                        && !string.IsNullOrWhiteSpace(cfg.ArchiveDirectory)
+                        && !string.IsNullOrWhiteSpace(cfg.DirectoryPath)
+                        && string.Equals(
+                            System.IO.Path.GetFullPath(cfg.ArchiveDirectory.Trim()),
+                            System.IO.Path.GetFullPath(cfg.DirectoryPath.Trim()),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        errors.Add("檔案模式：歸檔目錄不可與來源目錄相同");
+                    }
+                }
+            }
+        }
+
         if (task.TargetConnectionId == Guid.Empty) errors.Add("請選擇目標連線");
         if (string.IsNullOrEmpty(task.TargetSchema)) errors.Add("請選擇目標 Schema");
         if (string.IsNullOrEmpty(task.TargetTable)) errors.Add("請選擇目標 Table");
 
-        if (task.SourceConnectionId != Guid.Empty
+        if (task.SourceKind == SourceKind.Database
+            && task.SourceConnectionId != Guid.Empty
             && task.SourceConnectionId == task.TargetConnectionId
             && task.SourceSchema == task.TargetSchema
             && task.SourceTable == task.TargetTable

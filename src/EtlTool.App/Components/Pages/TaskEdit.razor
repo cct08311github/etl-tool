@@ -265,57 +265,181 @@ else
     <div class="row g-3 mb-3">
         <div class="col-md-6">
             <div class="card h-100">
-                <div class="card-header">來源 (Source)</div>
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>來源 (Source)</span>
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Source kind">
+                        <input type="radio" class="btn-check" name="sourceKind" id="src-db"
+                               checked="@(_task.SourceKind == EtlTool.Core.Models.SourceKind.Database)"
+                               @onchange="@(() => OnSourceKindChanged(EtlTool.Core.Models.SourceKind.Database))" />
+                        <label class="btn btn-outline-primary" for="src-db">🗄 資料庫</label>
+                        <input type="radio" class="btn-check" name="sourceKind" id="src-file"
+                               checked="@(_task.SourceKind == EtlTool.Core.Models.SourceKind.File)"
+                               @onchange="@(() => OnSourceKindChanged(EtlTool.Core.Models.SourceKind.File))" />
+                        <label class="btn btn-outline-primary" for="src-file">📄 檔案</label>
+                    </div>
+                </div>
                 <div class="card-body">
-                    <div class="mb-2">
-                        <label class="form-label">連線</label>
-                        <select class="form-select" @onchange="OnSourceConnectionChanged">
-                            <option value="">— 選擇 —</option>
-                            @foreach (var c in _connections)
-                            {
-                                <option value="@c.Id" selected="@(c.Id == _task.SourceConnectionId)">@c.Name (@c.ProviderType)</option>
-                            }
-                        </select>
-                    </div>
-                    <div class="mb-2">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <label class="form-label m-0">Schema</label>
-                            <button type="button" class="icon-btn" title="重新讀取 schema / table 清單"
-                                    disabled="@(_refreshingSource || _task.SourceConnectionId == Guid.Empty)"
-                                    @onclick="RefreshSourceMetadata">
-                                @if (_refreshingSource) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
-                            </button>
+                    @if (_task.SourceKind == EtlTool.Core.Models.SourceKind.Database)
+                    {
+                        <div class="mb-2">
+                            <label class="form-label">連線</label>
+                            <select class="form-select" @onchange="OnSourceConnectionChanged">
+                                <option value="">— 選擇 —</option>
+                                @foreach (var c in _connections)
+                                {
+                                    <option value="@c.Id" selected="@(c.Id == _task.SourceConnectionId)">@c.Name (@c.ProviderType)</option>
+                                }
+                            </select>
                         </div>
-                        <select class="form-select" @onchange="OnSourceSchemaChanged">
-                            <option value="">— 選擇 —</option>
-                            @foreach (var s in _sourceSchemas)
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <label class="form-label m-0">Schema</label>
+                                <button type="button" class="icon-btn" title="重新讀取 schema / table 清單"
+                                        disabled="@(_refreshingSource || _task.SourceConnectionId == Guid.Empty)"
+                                        @onclick="RefreshSourceMetadata">
+                                    @if (_refreshingSource) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
+                                </button>
+                            </div>
+                            <select class="form-select" @onchange="OnSourceSchemaChanged">
+                                <option value="">— 選擇 —</option>
+                                @foreach (var s in _sourceSchemas)
+                                {
+                                    <option value="@s" selected="@(s == _task.SourceSchema)">@s</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">Table</label>
+                            <select class="form-select" @onchange="OnSourceTableChanged">
+                                <option value="">— 選擇 —</option>
+                                @foreach (var t in _sourceTables)
+                                {
+                                    <option value="@t" selected="@(t == _task.SourceTable)">@t</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="mt-3 d-flex gap-2 align-items-center">
+                            <button type="button" class="btn btn-outline-primary btn-sm"
+                                    disabled="@(_previewBusy || _task.SourceConnectionId == Guid.Empty || string.IsNullOrEmpty(_task.SourceTable) || _task.Mappings.Count == 0)"
+                                    @onclick="RunSourcePreview">
+                                @if (_previewBusy) { <Icon Name="loader" /> <span>查詢中…</span> }
+                                else { <span>👀 預覽前 10 筆來源資料</span> }
+                            </button>
+                            @if (_task.Mappings.Count == 0)
                             {
-                                <option value="@s" selected="@(s == _task.SourceSchema)">@s</option>
+                                <span class="small text-muted">需先設好 Mapping 再預覽</span>
                             }
-                        </select>
-                    </div>
-                    <div class="mb-2">
-                        <label class="form-label">Table</label>
-                        <select class="form-select" @onchange="OnSourceTableChanged">
-                            <option value="">— 選擇 —</option>
-                            @foreach (var t in _sourceTables)
-                            {
-                                <option value="@t" selected="@(t == _task.SourceTable)">@t</option>
-                            }
-                        </select>
-                    </div>
-                    <div class="mt-3 d-flex gap-2 align-items-center">
-                        <button type="button" class="btn btn-outline-primary btn-sm"
-                                disabled="@(_previewBusy || _task.SourceConnectionId == Guid.Empty || string.IsNullOrEmpty(_task.SourceTable) || _task.Mappings.Count == 0)"
-                                @onclick="RunSourcePreview">
-                            @if (_previewBusy) { <Icon Name="loader" /> <span>查詢中…</span> }
-                            else { <span>👀 預覽前 10 筆來源資料</span> }
-                        </button>
-                        @if (_task.Mappings.Count == 0)
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-info small py-2 mb-2">
+                            檔案模式：排程觸發時掃描指定目錄符合 glob 的檔，依 mtime 由舊至新處理。每個檔在目標 DB 上獨立 transaction。
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label">📂 來源目錄</label>
+                            <input class="form-control font-monospace" @bind="_fileConfig.DirectoryPath"
+                                   @bind:after="UpdateFileConfigJson"
+                                   placeholder="/data/inbox 或 \\fileserver\etl\inbox" />
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-7">
+                                <label class="form-label">檔名 glob</label>
+                                <input class="form-control font-monospace" @bind="_fileConfig.GlobPattern"
+                                       @bind:after="UpdateFileConfigJson"
+                                       placeholder="*.csv / orders_*.csv" />
+                            </div>
+                            <div class="col-5">
+                                <label class="form-label">每次最多處理</label>
+                                <input type="number" min="1" class="form-control"
+                                       @bind="_fileConfig.MaxFilesPerRun" @bind:after="UpdateFileConfigJson" />
+                            </div>
+                        </div>
+                        <div class="row g-2 mt-2">
+                            <div class="col-6">
+                                <label class="form-label">格式</label>
+                                <select class="form-select" @bind="_fileConfig.Format" @bind:after="UpdateFileConfigJson">
+                                    <option value="@EtlTool.Core.Models.FileSourceFormat.Csv">CSV</option>
+                                    <option value="@EtlTool.Core.Models.FileSourceFormat.Excel">Excel (.xlsx)</option>
+                                    <option value="@EtlTool.Core.Models.FileSourceFormat.DelimitedText">文字檔（自訂分隔）</option>
+                                </select>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">編碼</label>
+                                <select class="form-select" @bind="_fileConfig.Encoding" @bind:after="UpdateFileConfigJson">
+                                    <option value="utf-8">UTF-8</option>
+                                    <option value="utf-8-bom">UTF-8 with BOM</option>
+                                    <option value="big5">Big5（繁中舊系統）</option>
+                                    <option value="gb18030">GB18030（簡中）</option>
+                                    <option value="shift-jis">Shift-JIS（日系）</option>
+                                    <option value="iso-8859-1">ISO-8859-1（西文）</option>
+                                </select>
+                            </div>
+                        </div>
+                        @if (_fileConfig.Format != EtlTool.Core.Models.FileSourceFormat.Excel)
                         {
-                            <span class="small text-muted">需先設好 Mapping 再預覽</span>
+                            <div class="row g-2 mt-2">
+                                <div class="col-6">
+                                    <label class="form-label">分隔字元</label>
+                                    <input class="form-control font-monospace" @bind="_fileConfig.Delimiter"
+                                           @bind:after="UpdateFileConfigJson"
+                                           placeholder=", 或 \t" />
+                                    <small class="text-muted">用 \t 表示 tab；\n / \r 同理</small>
+                                </div>
+                                <div class="col-6 d-flex align-items-end">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox"
+                                               @bind="_fileConfig.HasHeader" @bind:after="UpdateFileConfigJson" id="hasHeader" />
+                                        <label class="form-check-label" for="hasHeader">第一列為欄位名</label>
+                                    </div>
+                                </div>
+                            </div>
                         }
-                    </div>
+                        else
+                        {
+                            <div class="row g-2 mt-2">
+                                <div class="col-6">
+                                    <label class="form-label">Sheet 名稱</label>
+                                    <input class="form-control" @bind="_fileConfig.ExcelSheetName"
+                                           @bind:after="UpdateFileConfigJson"
+                                           placeholder="(空 = 第 1 個)" />
+                                </div>
+                                <div class="col-6 d-flex align-items-end">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox"
+                                               @bind="_fileConfig.HasHeader" @bind:after="UpdateFileConfigJson" id="hasHeaderXl" />
+                                        <label class="form-check-label" for="hasHeaderXl">第一列為欄位名</label>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                        <hr />
+                        <div class="row g-2">
+                            <div class="col-5">
+                                <label class="form-label">處理完動作</label>
+                                <select class="form-select" @bind="_fileConfig.PostAction" @bind:after="UpdateFileConfigJson">
+                                    <option value="@EtlTool.Core.Models.FilePostAction.Archive">📦 歸檔</option>
+                                    <option value="@EtlTool.Core.Models.FilePostAction.Delete">🗑 刪除</option>
+                                    <option value="@EtlTool.Core.Models.FilePostAction.None">原封不動</option>
+                                </select>
+                            </div>
+                            <div class="col-7">
+                                @if (_fileConfig.PostAction == EtlTool.Core.Models.FilePostAction.Archive)
+                                {
+                                    <label class="form-label">歸檔目錄</label>
+                                    <input class="form-control font-monospace" @bind="_fileConfig.ArchiveDirectory"
+                                           @bind:after="UpdateFileConfigJson"
+                                           placeholder="(空 = ./archive)" />
+                                }
+                            </div>
+                        </div>
+                        @if (_fileConfig.PostAction == EtlTool.Core.Models.FilePostAction.None)
+                        {
+                            <div class="alert alert-warning small mt-2 mb-0 py-2">
+                                ⚠ 「原封不動」模式下，下次掃描會再讀同樣的檔造成重複匯入。建議搭配檔名含時間戳（會變動）+ Upsert 模式。
+                            </div>
+                        }
+                    }
                 </div>
             </div>
         </div>
@@ -828,6 +952,29 @@ else
 
     // Source preview state — 顯示前 10 筆 source data 給 admin 在存檔前 sanity check
     private bool _previewBusy;
+
+    // File-source UI state — bound to _fileConfig；序列化進 _task.FileSourceConfigJson
+    private EtlTool.Core.Models.FileSourceConfig _fileConfig = new();
+
+    private void OnSourceKindChanged(EtlTool.Core.Models.SourceKind kind)
+    {
+        _task.SourceKind = kind;
+        if (kind == EtlTool.Core.Models.SourceKind.File)
+        {
+            // 切到檔案模式時，若還沒有 config JSON 就用預設 config 帶入
+            UpdateFileConfigJson();
+        }
+        else
+        {
+            // 切回 DB 模式：保留 FileSourceConfigJson 在 _task 內，使用者切回去資料還在
+        }
+    }
+
+    private void UpdateFileConfigJson()
+    {
+        _task.FileSourceConfigJson = System.Text.Json.JsonSerializer.Serialize(_fileConfig);
+    }
+
     private EtlTool.App.Services.SourcePreviewService.PreviewResult? _previewResult;
 
     private async Task RunSourcePreview()
@@ -1054,6 +1201,21 @@ else
                 .ToList();
             await ReloadSourceMetadata();
             await ReloadTargetMetadata();
+        }
+
+        // 還原 file source config（檔案模式時用；DB 模式時 JSON 為空但不影響）
+        if (!string.IsNullOrEmpty(_task.FileSourceConfigJson))
+        {
+            try
+            {
+                _fileConfig = System.Text.Json.JsonSerializer
+                    .Deserialize<EtlTool.Core.Models.FileSourceConfig>(_task.FileSourceConfigJson)
+                    ?? new EtlTool.Core.Models.FileSourceConfig();
+            }
+            catch
+            {
+                _fileConfig = new EtlTool.Core.Models.FileSourceConfig();
+            }
         }
     }
 

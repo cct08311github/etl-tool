@@ -6,6 +6,16 @@ public class EtlTask
     public string Name { get; set; } = "";
     public bool Enabled { get; set; } = true;
 
+    /// <summary>
+    /// 來源類型 — DB 連線（既有行為）或檔案路徑掃描。
+    /// File 模式下 SourceConnectionId / SourceSchema / SourceTable 不使用，
+    /// 改讀 <see cref="FileSourceConfigJson"/> 還原成 FileSourceConfig 物件。
+    /// </summary>
+    public SourceKind SourceKind { get; set; } = SourceKind.Database;
+
+    /// <summary>當 SourceKind=File 時的設定 JSON（FileSourceConfig 序列化）。</summary>
+    public string? FileSourceConfigJson { get; set; }
+
     public Guid SourceConnectionId { get; set; }
     public string SourceSchema { get; set; } = "";
     public string SourceTable { get; set; } = "";

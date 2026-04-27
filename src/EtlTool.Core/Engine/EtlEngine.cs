@@ -56,6 +56,12 @@ public sealed class EtlEngine
 
         try
         {
+            // 路徑分流：File 模式走獨立流程（沒有 source DB / source transaction）
+            if (task.SourceKind == SourceKind.File)
+            {
+                return await ExecuteFileAsync(task, run, ct);
+            }
+
             var sourceDef = await _connectionLookup.GetAsync(task.SourceConnectionId, ct)
                 ?? throw new InvalidOperationException($"Source connection {task.SourceConnectionId} not found.");
             var targetDef = await _connectionLookup.GetAsync(task.TargetConnectionId, ct)
@@ -312,6 +318,265 @@ public sealed class EtlEngine
 
             return run;
         }
+    }
+
+    /// <summary>
+    /// File-source mode: 掃指定目錄找符合 glob 的檔，一次處理 1～N 個檔（依
+    /// FileSourceConfig.MaxFilesPerRun），每個檔在 target DB 上是獨立 transaction。
+    /// 失敗的檔會 rollback；後續檔仍會嘗試（保證 batch 內部分成功仍進帳目標表）。
+    /// 處理完成依 PostAction 動作（archive / delete / 不動）。
+    /// </summary>
+    private async Task<RunHistory> ExecuteFileAsync(EtlTask task, RunHistory run, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(task.FileSourceConfigJson))
+            throw new InvalidOperationException("SourceKind=File 但 FileSourceConfigJson 未設定。");
+        var fileConfig = System.Text.Json.JsonSerializer.Deserialize<FileSourceConfig>(task.FileSourceConfigJson)
+            ?? throw new InvalidOperationException("FileSourceConfigJson 解析失敗。");
+
+        var targetDef = await _connectionLookup.GetAsync(task.TargetConnectionId, ct)
+            ?? throw new InvalidOperationException($"Target connection {task.TargetConnectionId} not found.");
+        var targetConnector = _factory.Create(targetDef);
+
+        // 掃檔（早期失敗就不要碰 target DB）
+        var matches = FileSourceScanner.Scan(fileConfig);
+        if (matches.Count == 0)
+        {
+            // 沒檔可處理：成功但 0 筆。RunHistory 標記成功，audit 記入。
+            run.Status = RunStatus.Success;
+            run.FinishedAt = DateTime.UtcNow;
+            run.RowsRead = 0;
+            run.RowsWritten = 0;
+            run.GeneratedReadSql = $"-- 無檔案可處理（{fileConfig.DirectoryPath} / {fileConfig.GlobPattern}）";
+            await _runSink.PersistAsync(run, ct);
+            if (_audit is not null)
+                await _audit.LogAsync(AuditCategory.Run, AuditAction.RunSucceeded,
+                    $"任務「{task.Name}」(File) 完成 — 來源目錄無符合 glob 的檔案",
+                    targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name, ct: ct);
+            return run;
+        }
+
+        var evaluator = TransformEvaluator.Compile(task.Mappings);
+        var targetCols = evaluator.Mappings.Select(m => m.TargetColumn).ToList();
+        var keyCols = evaluator.Mappings.Where(m => m.IsKey).Select(m => m.TargetColumn).ToList();
+        if (task.WriteMode == WriteMode.Upsert && keyCols.Count == 0)
+            throw new InvalidOperationException("Upsert 模式需至少勾選一個主鍵欄位 (IsKey)。");
+
+        var reader = FileSourceReaderFactory.Create(fileConfig.Format);
+        long totalRowsRead = 0, totalRowsWritten = 0;
+        var processedFiles = new List<string>();
+        var failedFiles = new List<string>();
+        var samplePayload = new List<Dictionary<string, object?>>();
+        var maskedCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // PII 預掃 (同 DB 路徑)
+        var piiKindByCol = new Dictionary<string, PiiDetector.PiiKind>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in targetCols) piiKindByCol[c] = PiiDetector.Inspect(c).Kind;
+
+        var generatedWriteParts = new List<string>();
+
+        foreach (var match in matches)
+        {
+            try
+            {
+                FileSourceOpenResult openResult;
+                try
+                {
+                    openResult = await reader.OpenAsync(match.FullPath, fileConfig, ct);
+                }
+                catch (Exception openEx)
+                {
+                    failedFiles.Add($"{match.FileName}: 開檔失敗 - {openEx.Message}");
+                    continue;
+                }
+
+                using var fileReader = openResult.Reader;
+
+                // 開 target transaction（每個檔一個 transaction）
+                await using var tgtConn = await targetConnector.OpenAsync(ct);
+                await using var tx = await tgtConn.BeginTransactionAsync(ct);
+
+                try
+                {
+                    if (task.WriteMode == WriteMode.DeleteInsert)
+                    {
+                        var deleteSql = await ExecuteDeleteAsync(targetConnector, tgtConn, tx, task, ct);
+                        generatedWriteParts.Add(deleteSql);
+                    }
+
+                    var batch = new List<object?[]>(task.BatchSize);
+                    long rowsReadInFile = 0;
+                    long rowsWrittenInFile = 0;
+
+                    async Task FlushAsync()
+                    {
+                        if (batch.Count == 0) return;
+                        int written;
+                        if (task.WriteMode == WriteMode.Upsert)
+                        {
+                            await using var upWriter = targetConnector.CreateUpsertWriter(tgtConn, tx);
+                            written = await upWriter.UpsertBatchAsync(
+                                task.TargetSchema, task.TargetTable,
+                                targetCols, keyCols, batch, ct);
+                        }
+                        else
+                        {
+                            await using var bulkWriter = targetConnector.CreateBulkWriter(tgtConn, tx);
+                            written = await bulkWriter.WriteBatchAsync(
+                                task.TargetSchema, task.TargetTable,
+                                targetCols, batch, ct);
+                        }
+                        rowsWrittenInFile += written;
+                        batch.Clear();
+                    }
+
+                    // Streaming row loop — 用同一筆 IDataReader 處理 CSV/Excel/Text
+                    while (fileReader.Read())
+                    {
+                        rowsReadInFile++;
+                        // 把 file row 轉成「source 欄名 → 值」字典，再用 evaluator 投影到 target 欄位
+                        var row = ProjectFileRow(fileReader, openResult.ColumnNames, evaluator, task);
+                        batch.Add(row);
+
+                        // 採樣
+                        if (samplePayload.Count < SamplePayloadMaxRows)
+                        {
+                            var sample = new Dictionary<string, object?>(targetCols.Count);
+                            for (int i = 0; i < targetCols.Count; i++)
+                            {
+                                var col = targetCols[i];
+                                var raw = row[i];
+                                var shouldMask = task.MaskSamplePayload || piiKindByCol[col] != PiiDetector.PiiKind.None;
+                                if (shouldMask)
+                                {
+                                    sample[col] = MaskValue(raw);
+                                    maskedCols.Add(col);
+                                }
+                                else
+                                {
+                                    sample[col] = raw;
+                                }
+                            }
+                            samplePayload.Add(sample);
+                        }
+
+                        if (batch.Count >= task.BatchSize)
+                            await FlushAsync();
+                    }
+                    await FlushAsync();
+
+                    // Row count assertion（單檔內檢查；多檔模式也許將來改全批次累計）
+                    var rowCheck = RowCountAssertion.Check(rowsReadInFile, task.MinExpectedRows, task.MaxExpectedRows, task.RowCountPolicy);
+                    if (!rowCheck.Passed && task.RowCountPolicy == RowCountAssertionPolicy.Fail)
+                    {
+                        throw new InvalidOperationException(
+                            $"檔案 {match.FileName} row count 失敗（policy=Fail）：{rowCheck.Violation}");
+                    }
+
+                    await tx.CommitAsync(ct);
+
+                    totalRowsRead += rowsReadInFile;
+                    totalRowsWritten += rowsWrittenInFile;
+                    processedFiles.Add($"{match.FileName} (read={rowsReadInFile}, written={rowsWrittenInFile})");
+
+                    // Post-action（在 transaction commit 之後做；失敗也只是 audit）
+                    try
+                    {
+                        var actionDesc = FileSourceScanner.ApplyPostAction(match.FullPath, fileConfig);
+                        generatedWriteParts.Add($"-- {actionDesc}");
+                    }
+                    catch (Exception postEx)
+                    {
+                        if (_audit is not null)
+                            await _audit.LogAsync(AuditCategory.Run, AuditAction.Update,
+                                $"任務「{task.Name}」處理 {match.FileName} 成功，但 post-action 失敗：{postEx.Message}",
+                                targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                                severity: AuditSeverity.Warning, ct: ct);
+                    }
+                }
+                catch
+                {
+                    try { await tx.RollbackAsync(ct); } catch { }
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                failedFiles.Add($"{match.FileName}: {ex.Message}");
+                _log.LogError(ex, "File-source: 處理 {File} 失敗", match.FileName);
+            }
+        }
+
+        run.RowsRead = totalRowsRead;
+        run.RowsWritten = totalRowsWritten;
+        run.GeneratedReadSql = $"-- File source scan: {fileConfig.DirectoryPath}/{fileConfig.GlobPattern}\n" +
+            $"-- 處理 {processedFiles.Count} 檔成功 / {failedFiles.Count} 檔失敗\n" +
+            string.Join("\n", processedFiles.Select(p => $"-- ✓ {p}")) +
+            (failedFiles.Count > 0 ? "\n" + string.Join("\n", failedFiles.Select(f => $"-- ✗ {f}")) : "");
+        run.GeneratedWriteSql = string.Join("\n", generatedWriteParts.Take(20));
+
+        if (samplePayload.Count > 0)
+        {
+            if (maskedCols.Count == 0)
+                run.SamplePayloadJson = JsonSerializer.Serialize(samplePayload);
+            else
+                run.SamplePayloadJson = JsonSerializer.Serialize(new
+                {
+                    rows = samplePayload,
+                    meta = new
+                    {
+                        maskedColumns = maskedCols.OrderBy(c => c, StringComparer.OrdinalIgnoreCase).ToArray(),
+                        mode = task.MaskSamplePayload ? "MaskAll" : "SmartMaskPii",
+                    },
+                });
+        }
+
+        // 整體成功 = 所有檔都成功；只要一筆失敗就標 Failed（但已成功的檔仍 commit 了）
+        if (failedFiles.Count == 0 && processedFiles.Count > 0)
+        {
+            run.Status = RunStatus.Success;
+        }
+        else
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage = "部分或全部檔案處理失敗：\n" + string.Join("\n", failedFiles);
+        }
+        run.FinishedAt = DateTime.UtcNow;
+        await _runSink.PersistAsync(run, ct);
+
+        if (_audit is not null)
+            await _audit.LogAsync(AuditCategory.Run,
+                run.Status == RunStatus.Success ? AuditAction.RunSucceeded : AuditAction.RunFailed,
+                $"任務「{task.Name}」(File) {(run.Status == RunStatus.Success ? "完成" : "失敗")}：" +
+                $"處理 {processedFiles.Count} 檔成功 / {failedFiles.Count} 檔失敗 / 共 {totalRowsRead} 列",
+                targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                severity: run.Status == RunStatus.Success ? AuditSeverity.Info : AuditSeverity.Error,
+                ct: ct);
+        return run;
+    }
+
+    /// <summary>
+    /// 把檔案 reader 一筆 row 投影成 target column 順序的 object?[]。
+    /// 不存在 source column → null（IDataReader 會 throw IndexOutOfRange，先用 columnNames lookup）。
+    /// </summary>
+    private static object?[] ProjectFileRow(
+        System.Data.IDataReader fileReader,
+        IReadOnlyList<string> sourceColumns,
+        TransformEvaluator evaluator,
+        EtlTask task)
+    {
+        // source col 名稱 → ordinal
+        var ordinalByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < sourceColumns.Count; i++)
+            ordinalByName[sourceColumns[i]] = i;
+
+        // 用一個 IDataRecord-style adapter 餵給 evaluator
+        var values = new object?[sourceColumns.Count];
+        for (int i = 0; i < sourceColumns.Count; i++)
+        {
+            values[i] = fileReader.IsDBNull(i) ? null : fileReader.GetValue(i);
+        }
+
+        var record = new ArrayRecord(sourceColumns, values, ordinalByName);
+        return evaluator.Project(record);
     }
 
     /// <summary>
