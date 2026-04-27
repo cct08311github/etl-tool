@@ -83,6 +83,16 @@
     }
     else
     {
-        <small class="text-muted">下次觸發 (本地)：@(_nextFireDescription ?? "—")</small>
+        var human = EtlTool.Core.Engine.CronHumanizer.Humanize(Value);
+        <div class="d-flex flex-column">
+            @if (human is not null)
+            {
+                <small class="text-muted"><strong>@human</strong> · 下次觸發 (本地)：@(_nextFireDescription ?? "—")</small>
+            }
+            else
+            {
+                <small class="text-muted">下次觸發 (本地)：@(_nextFireDescription ?? "—")</small>
+            }
+        </div>
     }
 </div>

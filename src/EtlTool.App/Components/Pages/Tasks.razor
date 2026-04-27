@@ -220,7 +220,19 @@ else
                 <td>
                     <span class="badge @(t.WriteMode == WriteMode.Upsert ? "bg-info" : "bg-primary")">@t.WriteMode</span>
                 </td>
-                <td><code class="text-muted small">@t.CronExpression</code></td>
+                <td>
+                    @{
+                        var human = EtlTool.Core.Engine.CronHumanizer.Humanize(t.CronExpression);
+                    }
+                    @if (human is not null)
+                    {
+                        <span class="small" title="@t.CronExpression">@human</span>
+                    }
+                    else
+                    {
+                        <code class="text-muted small">@t.CronExpression</code>
+                    }
+                </td>
                 <td class="small text-muted">
                     @(_nextFire.TryGetValue(t.Id, out var n) && n.HasValue
                         ? n.Value.ToLocalTime().ToString("MM-dd HH:mm")

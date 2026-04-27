@@ -134,6 +134,15 @@ public class EtlTask
     /// </summary>
     public int? DependencyLookbackHours { get; set; }
 
+    /// <summary>
+    /// 若為 true，且本任務的 LastSuccess 已晚於所有 parent 的 LastSuccess，
+    /// 排程觸發會跳過此次執行（idempotency）— 適合「每天 02:00 跑、parent 也每天 01:00 跑」
+    /// 這類「下游每個 parent 跑完只需要跑一次」的場景。
+    /// 預設 false：排程每次都跑，admin 自己決定要不要 idempotent。
+    /// 手動觸發 / 重試一律忽略此 flag。
+    /// </summary>
+    public bool RunOncePerParentSuccess { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

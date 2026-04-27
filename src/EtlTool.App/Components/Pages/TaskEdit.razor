@@ -155,6 +155,16 @@ else
                     <input class="form-control" type="number" min="1" max="720"
                            placeholder="(留空=24h)" @bind="_task.DependencyLookbackHours" />
                 </div>
+                <div class="col-md-3">
+                    <label class="form-label">Idempotent
+                        <small class="text-muted">parent 跑完後只跑一次</small>
+                    </label>
+                    <div class="form-check form-switch">
+                        <input type="checkbox" class="form-check-input"
+                               @bind="_task.RunOncePerParentSuccess" />
+                        <label class="form-check-label small text-muted">啟用後：若本任務已晚於所有 parent 成功過，下次 cron tick 會跳過</label>
+                    </div>
+                </div>
                 <div class="col-12">
                     <label class="form-label">上游任務依賴 (DependsOn)
                         <small class="text-muted">需排程觸發前確認以下任務「過去 lookback 內成功」；手動觸發 / 重試一律不檢查</small>

@@ -129,6 +129,30 @@ public sealed class EtlJob : IJob
                                 severity: AuditSeverity.Info, ct: context.CancellationToken);
                         return;
                     }
+
+                    // Idempotency：若本任務已晚於所有 parent 的 LastSuccess 跑過 Success，
+                    // 而 RunOncePerParentSuccess = true，表示此 cron tick 應該被跳過
+                    // （已經在每個 parent 的 success batch 之後成功過了）。
+                    if (task.RunOncePerParentSuccess
+                        && lastSuccess.TryGetValue(task.Id, out var myLastSuccess))
+                    {
+                        DateTime? maxParentSuccess = null;
+                        foreach (var pid in deps)
+                        {
+                            if (lastSuccess.TryGetValue(pid, out var p))
+                                maxParentSuccess = maxParentSuccess is null || p > maxParentSuccess ? p : maxParentSuccess;
+                        }
+                        if (maxParentSuccess is not null && myLastSuccess > maxParentSuccess)
+                        {
+                            _log.LogInformation("Skipping {TaskName} — already succeeded after all parents (idempotent)", task.Name);
+                            if (_audit is not null)
+                                await _audit.LogAsync(AuditCategory.Run, AuditAction.RunStarted,
+                                    $"⏸ 跳過任務「{task.Name}」— RunOncePerParentSuccess 已生效（最後成功 {myLastSuccess:HH:mm}Z 晚於所有 parent 最後成功 {maxParentSuccess:HH:mm}Z）",
+                                    targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                                    severity: AuditSeverity.Info, ct: context.CancellationToken);
+                            return;
+                        }
+                    }
                 }
                 catch (NotSupportedException) { /* sink doesn't support lookup → skip dependency check */ }
                 catch (Exception ex)
