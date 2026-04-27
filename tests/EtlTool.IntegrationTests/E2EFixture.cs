@@ -44,6 +44,7 @@ public sealed class E2EFixture : IAsyncLifetime
 
         services.AddScoped<IConnectionStringProtector, DataProtectionConnectionStringProtector>();
         services.AddSingleton<EtlTool.Core.Engine.IAuditLogger, AuditLogger>();
+        services.AddScoped<EntityChangeHistoryRepository>();
         services.AddScoped<ConnectionRepository>();
         services.AddScoped<EtlTaskRepository>();
         services.AddScoped<RunHistoryRepository>();

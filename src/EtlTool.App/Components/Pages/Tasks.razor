@@ -501,7 +501,8 @@ else
                         <AuthorizeView Roles="Admin,Operator" Context="ctx">
                             <Authorized>
                                 <a class="icon-btn" title="編輯" href="@($"tasks/{t.Id}")"><Icon Name="edit" /></a>
-                                <button class="icon-btn icon-btn-danger" title="送交覆核刪除"
+                                <button class="icon-btn icon-btn-danger"
+                                        title="@(_isAdmin ? "刪除任務" : "送交覆核刪除")"
                                         @onclick="() => OpenSubmit(t)"
                                         disabled="@_pendingTargets.Contains(t.Id)">
                                     <Icon Name="trash" />
@@ -522,19 +523,33 @@ else
     <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
         <div class="modal-dialog">
             <div class="modal-content">
-                <div class="modal-header"><h5 class="modal-title">送交覆核：刪除任務</h5></div>
+                <div class="modal-header">
+                    <h5 class="modal-title">@(_isAdmin ? "確認刪除任務" : "送交覆核：刪除任務")</h5>
+                </div>
                 <div class="modal-body">
-                    <p>
-                        將提交「<strong>@_submitTarget.Name</strong>」刪除請求，需另一位 Admin 在 <strong>/approvals</strong> 核准後才會真正刪除。<br />
-                        <span class="text-muted small">⛔ 你不能核准自己提交的請求；過期 7 天自動失效。</span>
-                    </p>
+                    @if (_isAdmin)
+                    {
+                        <p>
+                            將直接刪除任務「<strong>@_submitTarget.Name</strong>」並從排程器移除。<br />
+                            <span class="text-danger small">⛔ 此動作不可復原；歷史 RunHistory 仍會保留。</span>
+                        </p>
+                    }
+                    else
+                    {
+                        <p>
+                            將提交「<strong>@_submitTarget.Name</strong>」刪除請求，需 Admin 在 <strong>/approvals</strong> 核准後才會真正刪除。<br />
+                            <span class="text-muted small">⛔ 你不能核准自己提交的請求；過期 7 天自動失效。</span>
+                        </p>
+                    }
                     <label class="form-label">原因（建議填寫，會記入稽核）</label>
                     <textarea class="form-control" rows="3" @bind="_reason" placeholder="例：已被 newTask 取代"></textarea>
                     @if (_modalError is not null) { <div class="alert alert-danger mt-2">@_modalError</div> }
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" @onclick="() => _showSubmit = false">取消</button>
-                    <button class="btn btn-warning" @onclick="ConfirmSubmit">提交覆核</button>
+                    <button class="@(_isAdmin ? "btn btn-danger" : "btn btn-warning")" @onclick="ConfirmSubmit">
+                        @(_isAdmin ? "確認刪除" : "提交覆核")
+                    </button>
                 </div>
             </div>
         </div>
@@ -670,6 +685,7 @@ else
     }
     private Guid? _running;
     private string? _currentUsername;
+    private bool _isAdmin;
     private string? _message;
     private bool _isError;
 
@@ -777,6 +793,7 @@ else
     {
         var state = await AuthState.GetAuthenticationStateAsync();
         _currentUsername = state.User.Identity?.Name;
+        _isAdmin = state.User.IsInRole("Admin");
 
         // Read deep-link query params — supports name / status / sla / connection / tag
         var uri = new Uri(NavMgr.Uri);
@@ -972,17 +989,32 @@ else
         _modalError = null;
         try
         {
-            await ApprovalRepo.SubmitAsync(
-                ApprovalAction.DeleteTask,
-                targetType: nameof(EtlTool.Core.Models.EtlTask),
-                targetId: _submitTarget.Id,
-                targetName: _submitTarget.Name,
-                submittedBy: _currentUsername,
-                reason: string.IsNullOrWhiteSpace(_reason) ? null : _reason,
-                ct: CancellationToken.None);
-            _showSubmit = false;
-            _isError = false;
-            _message = $"已提交「{_submitTarget.Name}」刪除請求，請通知另一位 Admin 至 /approvals 核准。";
+            if (_isAdmin)
+            {
+                // Admin 直接刪除（單人模式 — 銀行通常 admin 為 owner，可獨立操作）
+                // 1) 從排程器拿掉 job/trigger（避免刪除後排程仍嘗試執行）
+                await Scheduler.UnscheduleAsync(_submitTarget.Id, CancellationToken.None);
+                // 2) 寫入 EntityChangeHistory + 主表刪除（含 audit）
+                await TaskRepo.DeleteAsync(_submitTarget.Id, CancellationToken.None, actor: _currentUsername);
+                _showSubmit = false;
+                _isError = false;
+                _message = $"已刪除任務「{_submitTarget.Name}」（含排程觸發器）。";
+            }
+            else
+            {
+                // Operator 走 maker-checker，需要 Admin 核准
+                await ApprovalRepo.SubmitAsync(
+                    ApprovalAction.DeleteTask,
+                    targetType: nameof(EtlTool.Core.Models.EtlTask),
+                    targetId: _submitTarget.Id,
+                    targetName: _submitTarget.Name,
+                    submittedBy: _currentUsername,
+                    reason: string.IsNullOrWhiteSpace(_reason) ? null : _reason,
+                    ct: CancellationToken.None);
+                _showSubmit = false;
+                _isError = false;
+                _message = $"已提交「{_submitTarget.Name}」刪除請求，請通知 Admin 至 /approvals 核准。";
+            }
             await Reload();
         }
         catch (Exception ex)

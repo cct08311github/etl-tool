@@ -167,7 +167,8 @@ else
                                     <Icon Name="copy" />
                                 </button>
                                 <a class="icon-btn" title="變更歷史" href="@($"connections/{c.Id}/history")"><Icon Name="history" /></a>
-                                <button class="icon-btn icon-btn-danger" title="送交覆核刪除"
+                                <button class="icon-btn icon-btn-danger"
+                                        title="@(_isAdmin ? "刪除連線" : "送交覆核刪除")"
                                         @onclick="() => OpenSubmit(c)"
                                         disabled="@_pendingTargets.Contains(c.Id)">
                                     <Icon Name="trash" />
@@ -215,19 +216,33 @@ else
     <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
         <div class="modal-dialog">
             <div class="modal-content">
-                <div class="modal-header"><h5 class="modal-title">送交覆核：刪除連線</h5></div>
+                <div class="modal-header">
+                    <h5 class="modal-title">@(_isAdmin ? "確認刪除連線" : "送交覆核：刪除連線")</h5>
+                </div>
                 <div class="modal-body">
-                    <p>
-                        將提交「<strong>@_submitTarget.Name</strong>」刪除請求，需另一位 Admin 在 <strong>/approvals</strong> 核准後才會真正刪除。<br />
-                        <span class="text-muted small">⛔ 你不能核准自己提交的請求。</span>
-                    </p>
+                    @if (_isAdmin)
+                    {
+                        <p>
+                            將直接刪除連線「<strong>@_submitTarget.Name</strong>」。<br />
+                            <span class="text-danger small">⛔ 此動作不可復原；引用此連線的任務會在執行時失敗，請先確認沒有任務在使用。</span>
+                        </p>
+                    }
+                    else
+                    {
+                        <p>
+                            將提交「<strong>@_submitTarget.Name</strong>」刪除請求，需 Admin 在 <strong>/approvals</strong> 核准後才會真正刪除。<br />
+                            <span class="text-muted small">⛔ 你不能核准自己提交的請求。</span>
+                        </p>
+                    }
                     <label class="form-label">原因（建議填寫，會記入稽核）</label>
                     <textarea class="form-control" rows="3" @bind="_reason" placeholder="例：已停用且 90 天未使用"></textarea>
                     @if (_modalError is not null) { <div class="alert alert-danger mt-2">@_modalError</div> }
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" @onclick="() => _showSubmit = false">取消</button>
-                    <button class="btn btn-warning" @onclick="ConfirmSubmit">提交覆核</button>
+                    <button class="@(_isAdmin ? "btn btn-danger" : "btn btn-warning")" @onclick="ConfirmSubmit">
+                        @(_isAdmin ? "確認刪除" : "提交覆核")
+                    </button>
                 </div>
             </div>
         </div>
@@ -242,6 +257,7 @@ else
     private List<EtlTool.Core.Models.ConnectionDefinition>? _items;
     private HashSet<Guid> _pendingTargets = new();
     private string? _currentUsername;
+    private bool _isAdmin;
     private string? _message;
     private bool _isError;
 
@@ -353,6 +369,7 @@ else
     {
         var state = await AuthState.GetAuthenticationStateAsync();
         _currentUsername = state.User.Identity?.Name;
+        _isAdmin = state.User.IsInRole("Admin");
         await Reload();
     }
 
@@ -381,17 +398,29 @@ else
         _modalError = null;
         try
         {
-            await ApprovalRepo.SubmitAsync(
-                ApprovalAction.DeleteConnection,
-                targetType: nameof(EtlTool.Core.Models.ConnectionDefinition),
-                targetId: _submitTarget.Id,
-                targetName: _submitTarget.Name,
-                submittedBy: _currentUsername,
-                reason: string.IsNullOrWhiteSpace(_reason) ? null : _reason,
-                ct: CancellationToken.None);
-            _showSubmit = false;
-            _isError = false;
-            _message = $"已提交「{_submitTarget.Name}」刪除請求，請通知另一位 Admin 至 /approvals 核准。";
+            if (_isAdmin)
+            {
+                // Admin 直接刪除（單人模式）— 含 EntityChangeHistory + audit
+                await ConnRepo.DeleteAsync(_submitTarget.Id, CancellationToken.None, actor: _currentUsername);
+                _showSubmit = false;
+                _isError = false;
+                _message = $"已刪除連線「{_submitTarget.Name}」。";
+            }
+            else
+            {
+                // Operator 走 maker-checker
+                await ApprovalRepo.SubmitAsync(
+                    ApprovalAction.DeleteConnection,
+                    targetType: nameof(EtlTool.Core.Models.ConnectionDefinition),
+                    targetId: _submitTarget.Id,
+                    targetName: _submitTarget.Name,
+                    submittedBy: _currentUsername,
+                    reason: string.IsNullOrWhiteSpace(_reason) ? null : _reason,
+                    ct: CancellationToken.None);
+                _showSubmit = false;
+                _isError = false;
+                _message = $"已提交「{_submitTarget.Name}」刪除請求，請通知 Admin 至 /approvals 核准。";
+            }
             await Reload();
         }
         catch (Exception ex)
