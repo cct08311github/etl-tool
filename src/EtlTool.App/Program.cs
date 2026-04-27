@@ -100,6 +100,8 @@ builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<ApprovalRepository>();
 builder.Services.AddScoped<EntityChangeHistoryRepository>();
 builder.Services.AddScoped<MaintenanceWindowRepository>();
+builder.Services.AddScoped<RuntimeSettingsRepository>();
+builder.Services.AddSingleton<EtlTool.App.Services.RuntimeSettingsService>();
 builder.Services.AddScoped<IMaintenanceWindowProvider>(sp => sp.GetRequiredService<MaintenanceWindowRepository>());
 builder.Services.AddScoped<AuditQueryRepository>();
 builder.Services.AddScoped<AuditChainVerifier>();

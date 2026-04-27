@@ -30,13 +30,19 @@ public sealed class HttpFailureNotifier : IFailureNotifier
     private readonly IHttpClientFactory _httpFactory;
     private readonly IConfiguration _config;
     private readonly ILogger<HttpFailureNotifier> _log;
+    private readonly RuntimeSettingsService? _settings;
 
-    public HttpFailureNotifier(IHttpClientFactory httpFactory, IConfiguration config, ILogger<HttpFailureNotifier> log)
+    public HttpFailureNotifier(IHttpClientFactory httpFactory, IConfiguration config, ILogger<HttpFailureNotifier> log,
+        RuntimeSettingsService? settings = null)
     {
         _httpFactory = httpFactory;
         _config = config;
         _log = log;
+        _settings = settings;
     }
+
+    /// <summary>讀設定：先 DB（執行期可調），後 appsettings（fallback）。</summary>
+    private string? GetCfg(string key) => _settings is null ? _config[key] : _settings.GetString(key);
 
     /// <summary>
     /// 給 admin /system 頁的「Test webhook」按鈕用：
@@ -45,11 +51,11 @@ public sealed class HttpFailureNotifier : IFailureNotifier
     /// </summary>
     public async Task<(bool Ok, int? StatusCode, string? Error)> TestAsync(CancellationToken ct)
     {
-        var url = _config["Webhooks:OnFailure"];
+        var url = GetCfg("Webhooks:OnFailure");
         if (string.IsNullOrWhiteSpace(url))
             return (false, null, "Webhooks:OnFailure 未設定");
 
-        var format = WebhookPayloadBuilder.ParseFormat(_config["Webhooks:Format"]);
+        var format = WebhookPayloadBuilder.ParseFormat(GetCfg("Webhooks:Format"));
         var fakeTask = new EtlTool.Core.Models.EtlTask
         {
             Id = Guid.NewGuid(),
@@ -90,10 +96,10 @@ public sealed class HttpFailureNotifier : IFailureNotifier
 
     public async Task NotifyRunOutcomeAsync(EtlTask task, RunHistory run, CancellationToken ct)
     {
-        var url = _config["Webhooks:OnFailure"];
+        var url = GetCfg("Webhooks:OnFailure");
         if (string.IsNullOrWhiteSpace(url)) return;
 
-        var format = WebhookPayloadBuilder.ParseFormat(_config["Webhooks:Format"]);
+        var format = WebhookPayloadBuilder.ParseFormat(GetCfg("Webhooks:Format"));
         var payload = WebhookPayloadBuilder.BuildPayload(format, task, run, run.ErrorMessage);
 
         try
@@ -130,7 +136,7 @@ public sealed class HttpFailureNotifier : IFailureNotifier
             Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
         };
 
-        var secret = _config["Webhooks:SigningSecret"];
+        var secret = GetCfg("Webhooks:SigningSecret");
         if (!string.IsNullOrEmpty(secret))
         {
             var ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();

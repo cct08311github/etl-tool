@@ -15,6 +15,8 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject Microsoft.Extensions.Options.IOptionsMonitor<EtlTool.Core.Scheduling.MaintenanceWindowsOptions> MaintOpts
 @inject EtlTool.Data.Repositories.MaintenanceWindowRepository MaintRepo
+@inject EtlTool.Data.Repositories.RuntimeSettingsRepository SettingsRepo
+@inject EtlTool.App.Services.RuntimeSettingsService SettingsSvc
 
 <PageTitle>系統資訊</PageTitle>
 
@@ -130,51 +132,102 @@ else
                         <span class="ms-2 small text-muted">所有來源 IP 可存取 admin 路徑（依賴角色控管）</span>
                     }
                 </td></tr>
-                <tr><th>Failure webhook URL</th><td>
-                    @if (string.IsNullOrEmpty(_security.WebhookUrl))
-                    {
-                        <span class="text-muted small">未設定（失敗不會推 webhook）</span>
-                    }
-                    else
-                    {
-                        <code class="small">@MaskUrl(_security.WebhookUrl)</code>
-                        <span class="ms-2 small text-muted">format = @(_security.WebhookFormat ?? "generic")</span>
-                        <button class="btn btn-sm btn-outline-primary ms-2" @onclick="TestWebhook" disabled="@_webhookBusy">
-                            @if (_webhookBusy) { <Icon Name="loader" /> <span>測試中…</span> }
-                            else { <span>📡 測試 webhook</span> }
+                <tr><th>Failure webhook URL <span class="badge bg-success ms-1" title="可在此頁直接修改，30 秒內生效，無需重啟">執行期可調</span></th><td>
+                    <div class="input-group input-group-sm" style="max-width: 720px">
+                        <input class="form-control font-monospace" @bind="_editWebhookUrl"
+                               placeholder="https://hooks.slack.com/services/... （留空 = 停用）" />
+                        <button class="btn btn-outline-primary" @onclick="@(() => SaveSetting("Webhooks:OnFailure", _editWebhookUrl, redact: false))" disabled="@(_savingKey is not null)">
+                            @if (_savingKey == "Webhooks:OnFailure") { <span>儲存中…</span> } else { <span>💾 儲存</span> }
                         </button>
-                        @if (_webhookTestResult is not null)
+                        @if (!string.IsNullOrEmpty(_security.WebhookUrl))
                         {
-                            <div class="mt-2 small">
-                                @if (_webhookTestResult.Ok)
-                                {
-                                    <span class="text-success">✓ 成功（HTTP @_webhookTestResult.StatusCode）— Slack/Teams 應已收到一筆「[TEST] Webhook configuration test」訊息</span>
-                                }
-                                else
-                                {
-                                    <span class="text-danger">⚠ 失敗（HTTP @(_webhookTestResult.StatusCode?.ToString() ?? "—")）：@_webhookTestResult.Error</span>
-                                }
-                            </div>
+                            <button class="btn btn-outline-info" @onclick="TestWebhook" disabled="@_webhookBusy">
+                                @if (_webhookBusy) { <Icon Name="loader" /> <span>測試中…</span> }
+                                else { <span>📡 測試</span> }
+                            </button>
                         }
+                    </div>
+                    <div class="small text-muted mt-1">
+                        @if (string.IsNullOrEmpty(_security.WebhookUrl))
+                        {
+                            <span>未設定（失敗不會推 webhook）。</span>
+                        }
+                        else
+                        {
+                            <span>目前生效：<code>@MaskUrl(_security.WebhookUrl)</code></span>
+                        }
+                        @if (_lastSavedKey == "Webhooks:OnFailure") { <span class="text-success ms-2">✓ 已儲存</span> }
+                    </div>
+                    @if (_webhookTestResult is not null)
+                    {
+                        <div class="mt-2 small">
+                            @if (_webhookTestResult.Ok)
+                            {
+                                <span class="text-success">✓ 成功（HTTP @_webhookTestResult.StatusCode）— Slack/Teams 應已收到一筆「[TEST] Webhook configuration test」訊息</span>
+                            }
+                            else
+                            {
+                                <span class="text-danger">⚠ 失敗（HTTP @(_webhookTestResult.StatusCode?.ToString() ?? "—")）：@_webhookTestResult.Error</span>
+                            }
+                        </div>
                     }
                 </td></tr>
-                <tr><th>Failure streak threshold</th><td><code>@_security.FailureStreakThreshold</code> 次</td></tr>
-                <tr><th>Webhook HMAC 簽章</th><td>
-                    @if (_security.WebhookSigned)
-                    {
-                        <span class="badge bg-success">已啟用</span>
-                        <span class="ms-2 small text-muted">
-                            每筆 webhook 帶 <code>X-Etl-Timestamp</code> + <code>X-Etl-Signature: sha256=&lt;hex&gt;</code>，
-                            算法 = <code>HMAC_SHA256(secret, "ts.body")</code>。Receiver 應驗 ts 在合理時窗（建議 ±5 分）後比對 signature。
-                        </span>
-                    }
-                    else
-                    {
-                        <span class="badge bg-secondary">未啟用</span>
-                        <span class="ms-2 small text-muted">
-                            設定 <code>Webhooks:SigningSecret</code> 後，receiver 可驗證 webhook 真的來自此服務（防偽造）。
-                        </span>
-                    }
+                <tr><th>Webhook 格式 <span class="badge bg-success ms-1">執行期可調</span></th><td>
+                    <div class="input-group input-group-sm" style="max-width: 360px">
+                        <select class="form-select" @bind="_editWebhookFormat">
+                            <option value="generic">generic（一般 JSON）</option>
+                            <option value="slack">slack（Slack incoming-webhook）</option>
+                            <option value="teams">teams（MS Teams MessageCard）</option>
+                        </select>
+                        <button class="btn btn-outline-primary" @onclick="@(() => SaveSetting("Webhooks:Format", _editWebhookFormat, redact: false))" disabled="@(_savingKey is not null)">
+                            @if (_savingKey == "Webhooks:Format") { <span>儲存中…</span> } else { <span>💾 儲存</span> }
+                        </button>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        目前生效：<code>@(_security.WebhookFormat ?? "generic")</code>
+                        @if (_lastSavedKey == "Webhooks:Format") { <span class="text-success ms-2">✓ 已儲存</span> }
+                    </div>
+                </td></tr>
+                <tr><th>連續失敗門檻 <span class="badge bg-success ms-1">執行期可調</span></th><td>
+                    <div class="input-group input-group-sm" style="max-width: 240px">
+                        <input type="number" min="1" max="100" class="form-control" @bind="_editFailureStreakThreshold" />
+                        <span class="input-group-text">次</span>
+                        <button class="btn btn-outline-primary" @onclick="@(() => SaveSetting("Webhooks:FailureStreakThreshold", _editFailureStreakThreshold.ToString(), redact: false))" disabled="@(_savingKey is not null)">
+                            @if (_savingKey == "Webhooks:FailureStreakThreshold") { <span>儲存中…</span> } else { <span>💾 儲存</span> }
+                        </button>
+                    </div>
+                    <div class="small text-muted mt-1">
+                        達到此連續失敗次數才會推 webhook（避免單次抖動 alert fatigue）。目前生效：<code>@_security.FailureStreakThreshold</code>。
+                        @if (_lastSavedKey == "Webhooks:FailureStreakThreshold") { <span class="text-success ms-2">✓ 已儲存</span> }
+                    </div>
+                </td></tr>
+                <tr><th>Webhook HMAC 簽章 <span class="badge bg-success ms-1">執行期可調</span></th><td>
+                    <div class="input-group input-group-sm" style="max-width: 480px">
+                        <input type="password" class="form-control font-monospace" @bind="_editSigningSecret"
+                               placeholder="@(_security.WebhookSigned ? "(留空保留現值)" : "輸入 32+ 字 random hex 啟用簽章")" />
+                        <button class="btn btn-outline-primary" @onclick="@(() => SaveSigningSecret())" disabled="@(_savingKey is not null)">
+                            @if (_savingKey == "Webhooks:SigningSecret") { <span>儲存中…</span> } else { <span>💾 儲存</span> }
+                        </button>
+                        @if (_security.WebhookSigned)
+                        {
+                            <button class="btn btn-outline-danger" @onclick="ClearSigningSecret" disabled="@(_savingKey is not null)" title="清除簽章 secret（webhook 將不再附簽章 header）">
+                                🗑 清除
+                            </button>
+                        }
+                    </div>
+                    <div class="small text-muted mt-1">
+                        @if (_security.WebhookSigned)
+                        {
+                            <span class="badge bg-success">已啟用</span>
+                            <span class="ms-2">每筆 webhook 帶 <code>X-Etl-Timestamp</code> + <code>X-Etl-Signature: sha256=&lt;hex&gt;</code>。Receiver 應驗 ts 在 ±5 分內後比對 signature。</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">未啟用</span>
+                            <span class="ms-2">設定後 receiver 可驗證 webhook 真的來自此服務（防偽造）。</span>
+                        }
+                        @if (_lastSavedKey == "Webhooks:SigningSecret") { <span class="text-success ms-2">✓ 已儲存（值不顯示）</span> }
+                    </div>
                 </td></tr>
                 <tr><th>Audit chain head/tail hash</th><td>
                     <div class="small font-monospace text-break">
@@ -219,10 +272,19 @@ else
                     </td>
                 </tr>
                 <tr>
-                    <th>Rate limit</th>
+                    <th>Rate limit <span class="badge bg-success ms-1">執行期可調</span></th>
                     <td>
-                        <code>@_apiRateLimitPerMinute</code> 請求 / 分 / IP
-                        <span class="ms-2 small text-muted">(超過 → 429 Too Many Requests)</span>
+                        <div class="input-group input-group-sm" style="max-width: 280px">
+                            <input type="number" min="1" max="10000" class="form-control" @bind="_editApiRateLimit" />
+                            <span class="input-group-text">/ 分 / IP</span>
+                            <button class="btn btn-outline-primary" @onclick="@(() => SaveSetting("Api:RateLimitPerMinute", _editApiRateLimit.ToString(), redact: false))" disabled="@(_savingKey is not null)">
+                                @if (_savingKey == "Api:RateLimitPerMinute") { <span>儲存中…</span> } else { <span>💾 儲存</span> }
+                            </button>
+                        </div>
+                        <div class="small text-muted mt-1">
+                            目前生效：<code>@_apiRateLimitPerMinute</code> req/min/IP（超過 → 429 Too Many Requests）。
+                            @if (_lastSavedKey == "Api:RateLimitPerMinute") { <span class="text-success ms-2">✓ 已儲存</span> }
+                        </div>
                     </td>
                 </tr>
                 <tr>
@@ -592,6 +654,89 @@ else
     private record Security(string? WebhookUrl, string? WebhookFormat, int FailureStreakThreshold, bool WebhookSigned, bool RequireHttps);
     private Security _security = new(null, null, 0, false, false);
 
+    // Inline-edit state for runtime-tunable settings
+    private string _editWebhookUrl = "";
+    private string _editWebhookFormat = "generic";
+    private int _editFailureStreakThreshold = 3;
+    private string _editSigningSecret = "";  // 不會回填現值（敏感）；只用於輸入新值
+    private int _editApiRateLimit = 60;
+    private string? _savingKey;             // 哪個 key 正在儲存
+    private string? _lastSavedKey;          // 最近儲存成功的 key（顯示「✓ 已儲存」）
+
+    private async Task SaveSetting(string key, string? value, bool redact)
+    {
+        _savingKey = key;
+        _lastSavedKey = null;
+        StateHasChanged();
+        try
+        {
+            var state = await AuthStateProvider.GetAuthenticationStateAsync();
+            var actor = state.User.Identity?.Name;
+            await SettingsRepo.SetAsync(key, value ?? "", actor, redact, CancellationToken.None);
+            SettingsSvc.Invalidate();  // 下次讀立刻拿到新值
+            _lastSavedKey = key;
+            // 重新載入 _security / _apiRateLimitPerMinute 顯示
+            await ReloadSecuritySnapshotAsync();
+        }
+        catch (Exception ex)
+        {
+            _lastSavedKey = $"ERROR:{ex.Message}";
+        }
+        finally
+        {
+            _savingKey = null;
+        }
+    }
+
+    private async Task SaveSigningSecret()
+    {
+        // 留空 = 不變（不要把現值清掉，敏感）；輸入值 → 寫入 + 清除輸入框
+        if (string.IsNullOrEmpty(_editSigningSecret))
+        {
+            _lastSavedKey = "Webhooks:SigningSecret:NOOP";
+            StateHasChanged();
+            return;
+        }
+        await SaveSetting("Webhooks:SigningSecret", _editSigningSecret, redact: true);
+        _editSigningSecret = "";  // 儲存後清掉輸入框
+    }
+
+    private async Task ClearSigningSecret()
+    {
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        var actor = state.User.Identity?.Name;
+        _savingKey = "Webhooks:SigningSecret";
+        try
+        {
+            await SettingsRepo.DeleteAsync("Webhooks:SigningSecret", actor, CancellationToken.None);
+            // 同時清除 appsettings 預設值不可能 — 但若 appsettings 有設，DB 清掉後會 fallback 回去
+            // 這裡只能清 DB 端的覆寫，appsettings 端要靠檔案編輯
+            SettingsSvc.Invalidate();
+            _lastSavedKey = "Webhooks:SigningSecret";
+            await ReloadSecuritySnapshotAsync();
+        }
+        catch (Exception ex) { _lastSavedKey = $"ERROR:{ex.Message}"; }
+        finally { _savingKey = null; }
+    }
+
+    private async Task ReloadSecuritySnapshotAsync()
+    {
+        // 走 RuntimeSettingsService（DB 優先；fallback appsettings）
+        _security = new Security(
+            WebhookUrl: SettingsSvc.GetString("Webhooks:OnFailure"),
+            WebhookFormat: SettingsSvc.GetString("Webhooks:Format"),
+            FailureStreakThreshold: SettingsSvc.GetInt("Webhooks:FailureStreakThreshold", 3),
+            WebhookSigned: !string.IsNullOrEmpty(SettingsSvc.GetString("Webhooks:SigningSecret")),
+            RequireHttps: Config.GetValue<bool?>("Security:RequireHttps") ?? false);
+        _apiRateLimitPerMinute = SettingsSvc.GetInt("Api:RateLimitPerMinute", 60);
+        // 編輯框預設值同步（若使用者沒手動改過）
+        _editWebhookUrl = _security.WebhookUrl ?? "";
+        _editWebhookFormat = _security.WebhookFormat ?? "generic";
+        _editFailureStreakThreshold = _security.FailureStreakThreshold;
+        _editApiRateLimit = _apiRateLimitPerMinute;
+        await Task.CompletedTask;
+    }
+
     private string? _chainHeadHash;
     private string? _chainTailHash;
     private List<EtlTool.Core.Models.EtlTask>? _autoDisabled;
@@ -895,15 +1040,21 @@ else
                     .ResolveTimeoutMinutes(),
                 MaxPasswordAgeDays: Config.GetValue<int?>($"{EtlTool.App.Auth.AuthOptions.SectionName}:MaxPasswordAgeDays") ?? 0);
 
+            // 走 RuntimeSettingsService — DB 優先，fallback appsettings
             _security = new Security(
-                WebhookUrl: Config["Webhooks:OnFailure"],
-                WebhookFormat: Config["Webhooks:Format"],
-                FailureStreakThreshold: Config.GetValue<int?>("Webhooks:FailureStreakThreshold") ?? 3,
-                WebhookSigned: !string.IsNullOrEmpty(Config["Webhooks:SigningSecret"]),
+                WebhookUrl: SettingsSvc.GetString("Webhooks:OnFailure"),
+                WebhookFormat: SettingsSvc.GetString("Webhooks:Format"),
+                FailureStreakThreshold: SettingsSvc.GetInt("Webhooks:FailureStreakThreshold", 3),
+                WebhookSigned: !string.IsNullOrEmpty(SettingsSvc.GetString("Webhooks:SigningSecret")),
                 RequireHttps: Config.GetValue<bool?>("Security:RequireHttps") ?? false);
+            // 編輯框預設值
+            _editWebhookUrl = _security.WebhookUrl ?? "";
+            _editWebhookFormat = _security.WebhookFormat ?? "generic";
+            _editFailureStreakThreshold = _security.FailureStreakThreshold;
 
             // API integration panel
-            _apiRateLimitPerMinute = Config.GetValue<int?>("Api:RateLimitPerMinute") ?? 60;
+            _apiRateLimitPerMinute = SettingsSvc.GetInt("Api:RateLimitPerMinute", 60);
+            _editApiRateLimit = _apiRateLimitPerMinute;
             try { _baseUrl = Nav.BaseUri; } catch { _baseUrl = "http://localhost:5247/"; }
 
             // Audit chain head/tail

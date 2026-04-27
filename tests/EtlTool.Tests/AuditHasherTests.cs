@@ -115,6 +115,21 @@ public class AuditHasherTests
     }
 
     [Fact]
+    public void Hash_stable_across_DateTimeKind_unspecified_and_utc()
+    {
+        // Regression: SQLite TEXT round-trip 把 DateTime.Kind=Utc 變成 Unspecified。
+        // Hash 必須對「同一瞬間」不論 Kind 都產出相同字串，否則 AuditChainVerifier
+        // 重算所有歷史 hash 都會誤判被竄改。
+        var ticks = new DateTime(2026, 4, 27, 0, 11, 6, 224, DateTimeKind.Utc).AddTicks(1234);
+        var withUtc = NewEvent(at: DateTime.SpecifyKind(ticks, DateTimeKind.Utc));
+        var withUnspec = NewEvent(at: DateTime.SpecifyKind(ticks, DateTimeKind.Unspecified));
+
+        Assert.Equal(
+            AuditHasher.ComputeHash(withUtc, null),
+            AuditHasher.ComputeHash(withUnspec, null));
+    }
+
+    [Fact]
     public void Chain_dependency_demonstration()
     {
         // 模擬一條 3 筆鏈
