@@ -66,6 +66,10 @@ public sealed class RunHistoryRepository : IRunHistorySink
         return grouped.ToDictionary(x => x.TaskId, x => x.LastAt);
     }
 
+    /// <summary>IRunHistorySink 介面的同名方法 — 把 Dictionary 包成 IReadOnlyDictionary 回傳。</summary>
+    async Task<IReadOnlyDictionary<Guid, DateTime>> IRunHistorySink.LastSuccessByTaskAsync(CancellationToken ct)
+        => await LastSuccessByTaskAsync(ct);
+
     /// <summary>
     /// 同 LastSuccessByTaskAsync 但抓 Failed runs。給 Tasks list 顯示「上次失敗」用。
     /// 沒失敗過的 task 不會在 dict 裡。

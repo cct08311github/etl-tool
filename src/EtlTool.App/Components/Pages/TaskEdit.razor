@@ -148,6 +148,38 @@ else
                     </label>
                     <textarea class="form-control" rows="2" maxlength="2000" placeholder="例：業主 alice@bank；on-call bob@bank；02-04 維護需先停 task" @bind="_task.Notes"></textarea>
                 </div>
+                <div class="col-12">
+                    <label class="form-label">上游任務依賴 (DependsOn)
+                        <small class="text-muted">需排程觸發前確認以下任務「過去 24h 內成功」；手動觸發 / 重試一律不檢查</small>
+                    </label>
+                    @if (_connections is null || _allTasks is null)
+                    {
+                        <div class="text-muted small">載入中…</div>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-wrap gap-2">
+                            @foreach (var other in _allTasks.Where(t => t.Id != _task.Id))
+                            {
+                                var isParent = _selectedDependsOn.Contains(other.Id);
+                                <label class="form-check m-0" style="cursor:pointer">
+                                    <input type="checkbox" class="form-check-input me-1"
+                                           checked="@isParent"
+                                           @onchange="e => ToggleDependency(other.Id, (bool)e.Value!)" />
+                                    <span class="form-check-label small">@other.Name</span>
+                                </label>
+                            }
+                        </div>
+                        @if (_selectedDependsOn.Count == 0)
+                        {
+                            <small class="text-muted">無依賴 — 排程觸發時直接執行</small>
+                        }
+                        else
+                        {
+                            <small class="text-muted">已選 @_selectedDependsOn.Count 個 parent；scheduler 會等到全部成功後才執行此任務。</small>
+                        }
+                    }
+                </div>
             </div>
             @if (Id is not null)
             {
@@ -606,6 +638,16 @@ else
     private string? _dryRunError;
 
     private string? _currentUsername;
+    private List<EtlTool.Core.Models.EtlTask>? _allTasks;
+    private HashSet<Guid> _selectedDependsOn = new();
+
+    private void ToggleDependency(Guid parentId, bool include)
+    {
+        if (_task is null) return;
+        if (include) _selectedDependsOn.Add(parentId);
+        else _selectedDependsOn.Remove(parentId);
+        _task.DependsOnTaskIds = string.Join(",", _selectedDependsOn);
+    }
 
     // PII mask 建議流程
     private bool _showPiiSuggest;
@@ -708,6 +750,7 @@ else
         var state = await AuthState.GetAuthenticationStateAsync();
         _currentUsername = state.User.Identity?.Name;
         _connections = await ConnRepo.ListAsync(ct);
+        _allTasks = await TaskRepo.ListLightweightAsync(ct);
         if (Id is null)
         {
             _task = new EtlTool.Core.Models.EtlTask();
@@ -717,6 +760,9 @@ else
             var existing = await TaskRepo.GetWithMappingsAsync(Id.Value, ct);
             if (existing is null) { Nav.NavigateTo("tasks"); return; }
             _task = existing;
+            // Hydrate _selectedDependsOn from stored CSV
+            _selectedDependsOn = EtlTool.Core.Engine.TaskDependencyChecker
+                .ParseDependsOnIds(_task.DependsOnTaskIds).ToHashSet();
             await ReloadSourceMetadata();
             await ReloadTargetMetadata();
         }

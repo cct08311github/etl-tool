@@ -20,6 +20,7 @@ public sealed class EtlJob : IJob
     private readonly IMaintenanceWindowProvider? _maintenanceProvider;
     private readonly IAuditLogger? _audit;
     private readonly ICircuitBreakerEnforcer? _circuitBreaker;
+    private readonly IRunHistorySink? _runSink;
 
     public EtlJob(
         EtlEngine engine, IEtlTaskLookup taskLookup, ILogger<EtlJob> log,
@@ -27,7 +28,8 @@ public sealed class EtlJob : IJob
         IOptionsMonitor<MaintenanceWindowsOptions>? maintenance = null,
         IMaintenanceWindowProvider? maintenanceProvider = null,
         IAuditLogger? audit = null,
-        ICircuitBreakerEnforcer? circuitBreaker = null)
+        ICircuitBreakerEnforcer? circuitBreaker = null,
+        IRunHistorySink? runSink = null)
     {
         _engine = engine;
         _taskLookup = taskLookup;
@@ -37,6 +39,7 @@ public sealed class EtlJob : IJob
         _maintenanceProvider = maintenanceProvider;
         _audit = audit;
         _circuitBreaker = circuitBreaker;
+        _runSink = runSink;
     }
 
     public async Task Execute(IJobExecutionContext context)
@@ -98,6 +101,39 @@ public sealed class EtlJob : IJob
                         targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
                         severity: AuditSeverity.Info, ct: context.CancellationToken);
                 return;
+            }
+        }
+
+        // 銀行控制 3：上游依賴檢查（手動觸發例外允許）
+        // 一個任務可宣告 DependsOnTaskIds = "guid1,guid2"，必須所有 parent 在過去 24h
+        // 內有 Success 才會跑；否則跳過並寫 Audit Info。
+        if (triggerType == TriggerType.Scheduled && _runSink is not null)
+        {
+            var deps = TaskDependencyChecker.ParseDependsOnIds(task.DependsOnTaskIds);
+            if (deps.Count > 0)
+            {
+                try
+                {
+                    var lastSuccess = await _runSink.LastSuccessByTaskAsync(context.CancellationToken);
+                    var depResult = TaskDependencyChecker.CheckDependencies(
+                        deps, lastSuccess, DateTime.UtcNow, lookbackHours: 24);
+                    if (!depResult.AllSatisfied)
+                    {
+                        _log.LogInformation("Skipping {TaskName} — dependency unmet: {Reason}",
+                            task.Name, depResult.Reason);
+                        if (_audit is not null)
+                            await _audit.LogAsync(AuditCategory.Run, AuditAction.RunStarted,
+                                $"⏸ 跳過任務「{task.Name}」— {depResult.Reason}（unmet={depResult.UnsatisfiedParentIds.Count}）",
+                                targetType: nameof(EtlTask), targetId: task.Id, targetName: task.Name,
+                                severity: AuditSeverity.Info, ct: context.CancellationToken);
+                        return;
+                    }
+                }
+                catch (NotSupportedException) { /* sink doesn't support lookup → skip dependency check */ }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Dependency check threw for task {TaskName}; proceeding without check", task.Name);
+                }
             }
         }
 

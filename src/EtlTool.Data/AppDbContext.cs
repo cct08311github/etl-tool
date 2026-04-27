@@ -43,6 +43,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.RowCountPolicy).HasConversion<int>();
             e.Property(x => x.CronExpression).HasMaxLength(100).IsRequired();
             e.Property(x => x.Notes).HasMaxLength(2000);
+            e.Property(x => x.DependsOnTaskIds).HasMaxLength(500);
             e.HasMany(x => x.Mappings)
                 .WithOne()
                 .HasForeignKey(m => m.EtlTaskId)

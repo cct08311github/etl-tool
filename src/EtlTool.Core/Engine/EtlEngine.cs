@@ -568,6 +568,14 @@ public sealed class EtlEngine
 public interface IRunHistorySink
 {
     Task PersistAsync(RunHistory run, CancellationToken ct);
+
+    /// <summary>
+    /// 給 dependency checker 用 — 一次撈所有 task 的最近一次 Success run 開始時間（UTC）。
+    /// 預設實作 throws — 想用 dependency 功能的 sink 必須覆寫。
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, DateTime>> LastSuccessByTaskAsync(CancellationToken ct)
+        => throw new NotSupportedException(
+            "This IRunHistorySink does not support LastSuccessByTaskAsync; dependency check unavailable.");
 }
 
 public interface IConnectionLookup
