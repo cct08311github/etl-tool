@@ -65,6 +65,31 @@ public static class DateTokenResolver
     }
 
     /// <summary>
+    /// 把任意純文字（檔案路徑 / 檔名 glob / 不需要 SQL quoting 的字串）裡的
+    /// ${TOKEN} 替換成「未加引號」的字面值。
+    ///
+    /// 用法：
+    ///   /data/inbox/${YYYY:yyyy-MM-dd}/orders.csv  →  /data/inbox/2026-04-27/orders.csv
+    ///   orders_${TODAY:yyyyMMdd}.csv                →  orders_20260427.csv
+    ///   journal_${YESTERDAY:yyyy-MM-dd}_*.txt       →  journal_2026-04-26_*.txt
+    ///
+    /// 不帶 :format 的 token 會被替換成 yyyy-MM-dd 預設格式（檔名通常不需要時間部分）。
+    /// 不認得的 token 不替換（保留原樣 ${...}），方便排錯。
+    /// </summary>
+    public static string SubstituteFilePath(string path, DateTime? referenceNow = null)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        var now = referenceNow ?? DateTime.Now;
+        return SubstituteRegex.Replace(path, m =>
+        {
+            var dt = ResolveByName(m.Groups["token"].Value.ToUpperInvariant(), now);
+            if (dt is null) return m.Value;  // 不認得 → 原樣保留
+            var fmt = m.Groups["fmt"].Success ? m.Groups["fmt"].Value : "yyyy-MM-dd";
+            return dt.Value.ToString(fmt, CultureInfo.InvariantCulture);
+        });
+    }
+
+    /// <summary>
     /// 把 SQL 字串中的 ${TOKEN} 全部替換成 provider-specific 字面值。
     /// - 帶 :format → 替換成單引號字串（無 escape；日期格式不會含單引號所以安全）
     /// - 不帶 → 替換成 DATE/TIMESTAMP 字面值

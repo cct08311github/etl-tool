@@ -167,4 +167,54 @@ public class FileSourceScannerTests : IDisposable
         FileSourceScanner.ApplyPostAction(path, new FileSourceConfig { PostAction = FilePostAction.None });
         Assert.True(File.Exists(path));
     }
+
+    [Fact]
+    public void Glob_pattern_with_date_token_resolves_at_scan_time()
+    {
+        // 模擬 referenceNow = 2026-04-27 → ${TODAY:yyyyMMdd} → 20260427
+        Touch("orders_20260427.csv", DateTime.UtcNow);
+        Touch("orders_20260426.csv", DateTime.UtcNow.AddDays(-1));
+
+        var refNow = new DateTime(2026, 4, 27, 10, 0, 0);
+        var matches = FileSourceScanner.Scan(new FileSourceConfig
+        {
+            DirectoryPath = _tempDir,
+            GlobPattern = "orders_${TODAY:yyyyMMdd}.csv",
+            MaxFilesPerRun = 0,
+        }, refNow);
+        Assert.Single(matches);
+        Assert.Equal("orders_20260427.csv", matches[0].FileName);
+    }
+
+    [Fact]
+    public void DirectoryPath_with_date_token_resolves()
+    {
+        var refNow = new DateTime(2026, 4, 27);
+        var dayDir = Path.Combine(_tempDir, "2026-04-27");
+        Directory.CreateDirectory(dayDir);
+        File.WriteAllText(Path.Combine(dayDir, "today.csv"), "x");
+
+        var matches = FileSourceScanner.Scan(new FileSourceConfig
+        {
+            DirectoryPath = Path.Combine(_tempDir, "${TODAY:yyyy-MM-dd}"),
+            GlobPattern = "*.csv",
+            MaxFilesPerRun = 0,
+        }, refNow);
+        Assert.Single(matches);
+        Assert.Equal("today.csv", matches[0].FileName);
+    }
+
+    [Fact]
+    public void Yesterday_token_resolves_correctly()
+    {
+        Touch("daily_20260426.csv", DateTime.UtcNow);
+        var refNow = new DateTime(2026, 4, 27);
+        var matches = FileSourceScanner.Scan(new FileSourceConfig
+        {
+            DirectoryPath = _tempDir,
+            GlobPattern = "daily_${YESTERDAY:yyyyMMdd}.csv",
+            MaxFilesPerRun = 0,
+        }, refNow);
+        Assert.Single(matches);
+    }
 }

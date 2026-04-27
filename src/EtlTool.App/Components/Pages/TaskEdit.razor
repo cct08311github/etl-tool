@@ -340,14 +340,21 @@ else
                             <label class="form-label">📂 來源目錄</label>
                             <input class="form-control font-monospace" @bind="_fileConfig.DirectoryPath"
                                    @bind:after="UpdateFileConfigJson"
-                                   placeholder="/data/inbox 或 \\fileserver\etl\inbox" />
+                                   placeholder="/data/inbox 或 /data/inbox/${TODAY:yyyy-MM-dd}" />
+                            <small class="text-muted">支援日期變數（見下方檔名 glob 說明）</small>
                         </div>
                         <div class="row g-2">
                             <div class="col-7">
                                 <label class="form-label">檔名 glob</label>
                                 <input class="form-control font-monospace" @bind="_fileConfig.GlobPattern"
                                        @bind:after="UpdateFileConfigJson"
-                                       placeholder="*.csv / orders_*.csv" />
+                                       placeholder="*.csv / orders_${TODAY:yyyyMMdd}_*.csv" />
+                                <small class="text-muted">
+                                    支援 <code>${TODAY:yyyy-MM-dd}</code> /
+                                    <code>${YESTERDAY:yyyyMMdd}</code> /
+                                    <code>${MONTH_START:yyyy-MM}</code> /
+                                    <code>${DAYS_AGO_3:yyyyMMdd}</code> 等日期變數，排程觸發時即時展開。
+                                </small>
                             </div>
                             <div class="col-5">
                                 <label class="form-label">每次最多處理</label>

@@ -16,7 +16,7 @@
 
 <div class="card mb-3">
     <div class="card-body">
-        <div class="row g-2 align-items-end">
+        <div class="row g-2">
             <div class="col-md-2">
                 <label class="form-label small mb-1">起始 (UTC)</label>
                 <input type="datetime-local" class="form-control form-control-sm" @bind="_filterFrom" />
@@ -35,14 +35,17 @@
                 </select>
             </div>
             <div class="col-md-2">
-                <label class="form-label small mb-1">錯誤類別</label>
+                <label class="form-label small mb-1">
+                    錯誤類別
+                    <span class="text-muted ms-1" style="cursor: help"
+                          title="僅對 Failed run 套用此過濾條件；Success/Running 不分類">ⓘ</span>
+                </label>
                 <select class="form-select form-select-sm" @bind="_filterErrorClass">
                     <option value="">全部</option>
                     <option value="Transient">🔁 暫時性</option>
                     <option value="Permanent">🛑 永久性</option>
                     <option value="Unknown">❓ 未分類</option>
                 </select>
-                <small class="text-muted">僅對 Failed run 套用</small>
             </div>
             <div class="col-md-3">
                 <label class="form-label small mb-1">任務</label>
@@ -57,13 +60,15 @@
                     }
                 </select>
             </div>
-            <div class="col-md-1 d-flex">
+            <div class="col-md-1">
+                <label class="form-label small mb-1 d-block">&nbsp;</label>
                 <button class="btn btn-sm btn-primary w-100" @onclick="ApplyFilter" disabled="@_loading">
                     @if (_loading) { <Icon Name="loader" /> } else { <span>套用</span> }
                 </button>
             </div>
         </div>
-        <div class="d-flex gap-2 mt-2">
+        <div class="d-flex gap-2 mt-2 small">
+            <span class="text-muted">快速：</span>
             <button type="button" class="btn btn-sm btn-link p-0" @onclick="QuickToday">今日</button>
             <span class="text-muted">·</span>
             <button type="button" class="btn btn-sm btn-link p-0" @onclick="QuickLast7Days">近 7 天</button>
@@ -190,8 +195,9 @@ else
         var ct = CancellationToken.None;
         _allTasks = await TaskRepo.ListLightweightAsync(ct);
         _taskNamesById = _allTasks.ToDictionary(t => t.Id, t => t.Name);
-        // 預設帶「近 7 天 + 失敗」進入：銀行 ops 進來就是要 triage 失敗
-        QuickFailedOnly();
+        // 預設帶「近 7 天 + 全部」— 即使沒失敗 run 也至少看得到成功記錄
+        // 想 triage 失敗的人按上方「僅失敗」一鍵切過去
+        QuickLast7Days();
         await ApplyFilter();
     }
 

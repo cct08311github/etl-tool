@@ -14,16 +14,26 @@ public static class FileSourceScanner
 {
     public sealed record FileMatch(string FullPath, string FileName, long SizeBytes, DateTime LastWriteUtc);
 
-    public static List<FileMatch> Scan(FileSourceConfig config)
+    public static List<FileMatch> Scan(FileSourceConfig config) => Scan(config, DateTime.Now);
+
+    public static List<FileMatch> Scan(FileSourceConfig config, DateTime referenceNow)
     {
         if (string.IsNullOrWhiteSpace(config.DirectoryPath))
             throw new InvalidOperationException("FileSourceConfig.DirectoryPath 未設定。");
 
-        var dir = new DirectoryInfo(config.DirectoryPath);
-        if (!dir.Exists)
-            throw new DirectoryNotFoundException($"來源目錄不存在：{config.DirectoryPath}");
+        // 把日期 token 替換掉再做 glob match
+        // 範例：/data/inbox/${TODAY:yyyy-MM-dd}/  → /data/inbox/2026-04-27/
+        //      orders_${YESTERDAY:yyyyMMdd}_*.csv → orders_20260426_*.csv
+        var resolvedDir = DateTokenResolver.SubstituteFilePath(config.DirectoryPath, referenceNow);
+        var resolvedGlob = string.IsNullOrWhiteSpace(config.GlobPattern)
+            ? "*"
+            : DateTokenResolver.SubstituteFilePath(config.GlobPattern.Trim(), referenceNow);
 
-        var pattern = string.IsNullOrWhiteSpace(config.GlobPattern) ? "*" : config.GlobPattern.Trim();
+        var dir = new DirectoryInfo(resolvedDir);
+        if (!dir.Exists)
+            throw new DirectoryNotFoundException($"來源目錄不存在：{resolvedDir}");
+
+        var pattern = resolvedGlob;
         var matches = dir.EnumerateFiles(pattern, SearchOption.TopDirectoryOnly)
             // 排除 archive 目錄裡的檔案（如果使用者把 archive 設在同一個目錄底下）
             .Where(f => !IsInArchiveSubdir(f.FullName, dir.FullName, config.ArchiveDirectory))
