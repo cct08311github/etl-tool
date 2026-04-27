@@ -275,6 +275,74 @@ app.MapGet("/api/tasks/last-run", async (HttpContext ctx) =>
         tasks = snapshot,
     }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
 }).AllowAnonymous();
+
+// 單一 task 的詳細狀態（含最近 10 筆 runs）— monitoring 工具點擊 alert 時 drill-down 用
+app.MapGet("/api/tasks/{taskId:guid}", async (Guid taskId, HttpContext ctx) =>
+{
+    var sp = ctx.RequestServices;
+    await using var scope = sp.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<EtlTool.Data.AppDbContext>();
+    var runRepo = scope.ServiceProvider.GetRequiredService<EtlTool.Data.Repositories.RunHistoryRepository>();
+
+    var t = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions
+        .FirstOrDefaultAsync(db.EtlTasks.AsNoTracking(), x => x.Id == taskId, ctx.RequestAborted);
+    if (t is null)
+    {
+        ctx.Response.StatusCode = 404;
+        ctx.Response.ContentType = "application/json; charset=utf-8";
+        await ctx.Response.WriteAsync("""{"error":"task not found"}""", ctx.RequestAborted);
+        return;
+    }
+
+    var lastSuccess = await runRepo.LastSuccessByTaskAsync(ctx.RequestAborted);
+    var lastFailure = await runRepo.LastFailureByTaskAsync(ctx.RequestAborted);
+    var sla = await runRepo.SuccessRateByTaskAsync(TimeSpan.FromDays(30), ctx.RequestAborted);
+    var recent = await runRepo.ListByTaskAsync(taskId, 10, ctx.RequestAborted);
+
+    var detail = new
+    {
+        id = t.Id,
+        name = t.Name,
+        enabled = t.Enabled,
+        autoDisabledAt = t.AutoDisabledAt,
+        autoDisabledReason = t.AutoDisabledReason,
+        cron = t.CronExpression,
+        cronDescription = EtlTool.Core.Engine.CronHumanizer.Humanize(t.CronExpression),
+        tags = t.Tags,
+        notes = t.Notes,
+        source = new { connectionId = t.SourceConnectionId, schema = t.SourceSchema, table = t.SourceTable },
+        target = new { connectionId = t.TargetConnectionId, schema = t.TargetSchema, table = t.TargetTable },
+        writeMode = t.WriteMode.ToString(),
+        lastSuccess = lastSuccess.TryGetValue(t.Id, out var ls) ? (DateTime?)ls : null,
+        lastFailure = lastFailure.TryGetValue(t.Id, out var lf) ? (DateTime?)lf : null,
+        sla30d = sla.TryGetValue(t.Id, out var s) && s.Total > 0
+            ? new { successRate = Math.Round(s.Success * 100.0 / s.Total, 1), success = s.Success, total = s.Total }
+            : null,
+        recentRuns = recent.Select(r => new
+        {
+            id = r.Id,
+            startedAt = r.StartedAt,
+            finishedAt = r.FinishedAt,
+            durationSec = r.FinishedAt is null ? 0 : (r.FinishedAt.Value - r.StartedAt).TotalSeconds,
+            status = r.Status.ToString(),
+            triggerType = r.TriggerType.ToString(),
+            rowsRead = r.RowsRead,
+            rowsWritten = r.RowsWritten,
+            errorMessage = r.ErrorMessage,
+        }).ToList(),
+    };
+
+    ctx.Response.ContentType = "application/json; charset=utf-8";
+    await System.Text.Json.JsonSerializer.SerializeAsync(ctx.Response.Body, detail,
+        new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+}).AllowAnonymous();
+
+// /api/health — JSON 版本的 health check（與 /healthz/detail 相同 payload，但 path 風格一致）
+app.MapGet("/api/health", async (HttpContext ctx) =>
+{
+    var detail = await EtlTool.App.Services.DetailedHealthCheck.CollectAsync(ctx.RequestServices, ctx.RequestAborted);
+    await EtlTool.App.Services.DetailedHealthCheck.WriteJsonAsync(ctx, detail);
+}).AllowAnonymous();
 // Detailed health JSON — db / quartz / connection monitor / audit write 各 component 細節
 // 給銀行 ops 監控系統解析；簡單的 /healthz 仍保留供 LB / firewall 用
 app.MapGet("/healthz/detail", async (HttpContext ctx) =>

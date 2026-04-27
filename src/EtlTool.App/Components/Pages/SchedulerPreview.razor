@@ -4,6 +4,7 @@
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
 @inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo
 @inject EtlTool.Core.Scheduling.SchedulerService Scheduler
+@inject Microsoft.JSInterop.IJSRuntime JS
 
 <PageTitle>排程預覽 — 未來 24h</PageTitle>
 
@@ -17,9 +18,36 @@
             <option value="24">24h</option>
             <option value="72">3d</option>
         </select>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="ShowMermaid"
+                disabled="@(_fires is null || _fires.Count == 0)"
+                title="生成 Mermaid gantt — 可貼到 GitHub / Obsidian markdown 顯示時間軸">
+            🔗 Mermaid timeline
+        </button>
         <a class="btn btn-link btn-sm" href="/scheduler">← 排程器即時狀態</a>
     </div>
 </div>
+
+@if (_showMermaid)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Mermaid gantt — 未來 @_hoursAhead h 排程</h5>
+                </div>
+                <div class="modal-body">
+                    <div class="small text-muted mb-2">
+                        把以下 Mermaid 文字貼到 GitHub / GitLab / Obsidian / mermaid.live 即可呈現時間軸。
+                    </div>
+                    <pre class="bg-light p-2 mb-0" style="max-height: 480px; overflow:auto"><code>@_mermaidText</code></pre>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showMermaid = false">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @if (_fires is null)
 {
@@ -86,6 +114,42 @@ else
     private record FireEntry(Guid TaskId, string TaskName, string? Tags, DateTime FireAt, string Cron, string? CronHuman, string DepStatus, string? DepDetail);
     private List<FireEntry>? _fires;
     private int _taskCount;
+
+    private bool _showMermaid;
+    private string _mermaidText = "";
+
+    /// <summary>把 _fires 轉成 Mermaid gantt 格式：每個 task 一個 section，每個 fire 一個 milestone。</summary>
+    private void ShowMermaid()
+    {
+        if (_fires is null || _fires.Count == 0) return;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("gantt");
+        sb.AppendLine($"    title 排程預覽 — 未來 {_hoursAhead} 小時");
+        sb.AppendLine("    dateFormat YYYY-MM-DD HH:mm:ss");
+        sb.AppendLine("    axisFormat %m-%d %H:%M");
+        sb.AppendLine();
+
+        // Group fires by task name
+        var byTask = _fires.GroupBy(f => f.TaskName).OrderBy(g => g.Key);
+        foreach (var grp in byTask)
+        {
+            // section name 不允許 ':' — 用空白替代，並把名稱限長
+            var sectionName = grp.Key.Replace(":", " ").Replace("'", "");
+            if (sectionName.Length > 40) sectionName = sectionName[..40];
+            sb.AppendLine($"    section {sectionName}");
+            int idx = 0;
+            foreach (var f in grp.OrderBy(f => f.FireAt))
+            {
+                var status = f.DepStatus == "wait" ? " :crit" : "";
+                // Mermaid milestones 需要任務名 + ID + start time。給最短 1 分鐘 duration 讓視覺顯示。
+                var time = f.FireAt.ToString("yyyy-MM-dd HH:mm:ss");
+                sb.AppendLine($"    fire-{idx}{status} :milestone, {time}, 0m");
+                idx++;
+            }
+        }
+        _mermaidText = sb.ToString();
+        _showMermaid = true;
+    }
 
     protected override async Task OnInitializedAsync() => await Reload();
 
