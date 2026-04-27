@@ -148,7 +148,13 @@ else
                     <label class="form-label">標籤 (Tags)
                         <small class="text-muted">逗號分隔；用於 Tasks list 過濾與分類。例：team-finance, daily, critical</small>
                     </label>
-                    <input class="form-control" maxlength="200" placeholder="例：finance, daily, critical" @bind="_task.Tags" />
+                    <input class="form-control" maxlength="200" list="task-tags-existing" placeholder="例：finance, daily, critical" @bind="_task.Tags" />
+                    <datalist id="task-tags-existing">
+                        @foreach (var tag in _knownTags)
+                        {
+                            <option value="@tag" />
+                        }
+                    </datalist>
                     @if (!string.IsNullOrWhiteSpace(_task.Tags))
                     {
                         <div class="d-flex flex-wrap gap-1 mt-1">
@@ -157,6 +163,10 @@ else
                                 <span class="badge bg-secondary">@tag</span>
                             }
                         </div>
+                    }
+                    @if (_knownTags.Count > 0)
+                    {
+                        <small class="text-muted d-block mt-1">既有 tags（點擊 input 下拉建議）：@string.Join(", ", _knownTags.Take(15))@(_knownTags.Count > 15 ? $" …+{_knownTags.Count - 15}" : "")</small>
                     }
                 </div>
                 <div class="col-12">
@@ -729,6 +739,7 @@ else
     private List<EtlTool.Core.Models.EtlTask>? _allTasks;
     private HashSet<Guid> _selectedDependsOn = new();
     private List<EtlTool.Core.Models.EtlTask> _downstreamTasks = new();
+    private List<string> _knownTags = new();
 
     private void ToggleDependency(Guid parentId, bool include)
     {
@@ -842,6 +853,15 @@ else
         _currentUsername = state.User.Identity?.Name;
         _connections = await ConnRepo.ListAsync(ct);
         _allTasks = await TaskRepo.ListLightweightAsync(ct);
+        // Collect distinct tags from all tasks for autocomplete
+        _knownTags = _allTasks
+            .Where(t => !string.IsNullOrEmpty(t.Tags))
+            .SelectMany(t => t.Tags!.Split(',', StringSplitOptions.RemoveEmptyEntries))
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s)
+            .ToList();
         if (Id is null)
         {
             _task = new EtlTool.Core.Models.EtlTask();

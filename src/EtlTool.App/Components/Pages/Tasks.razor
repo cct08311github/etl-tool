@@ -93,14 +93,18 @@
                 </div>
                 <div class="modal-body">
                     <p>
-                        將把
+                        @{
+                            var scope = HasActiveFilter ? (_filtered ?? _items ?? new()) : (_items ?? new());
+                            var scopeLabel = HasActiveFilter ? $"目前篩選結果（{scope.Count} 個任務）" : "所有任務";
+                        }
+                        將對 <strong>@scopeLabel</strong> 中
                         @if (_bulkEnable)
                         {
-                            <span><strong>所有 Disabled 任務 (@(_items?.Count(t => !t.Enabled) ?? 0) 個)</strong> 設為 Enabled</span>
+                            <span>Disabled 的 (<strong>@(scope.Count(t => !t.Enabled)) 個</strong>) 設為 Enabled</span>
                         }
                         else
                         {
-                            <span><strong>所有 Enabled 任務 (@(_items?.Count(t => t.Enabled) ?? 0) 個)</strong> 設為 Disabled</span>
+                            <span>Enabled 的 (<strong>@(scope.Count(t => t.Enabled)) 個</strong>) 設為 Disabled</span>
                         }
                         ，並重新註冊 Quartz scheduler。
                     </p>
@@ -147,6 +151,36 @@
 @if (_message is not null)
 {
     <div class="alert @(_isError ? "alert-danger" : "alert-info")">@_message</div>
+}
+
+@if (HasActiveFilter && _items is not null && _filtered is not null)
+{
+    <div class="alert alert-info py-1 px-2 mb-2 small d-flex flex-wrap align-items-center gap-2">
+        <strong>📌 目前篩選</strong>
+        <span class="text-muted">(@_filtered.Count / @_items.Count)</span>
+        @if (!string.IsNullOrWhiteSpace(_filterName))
+        {
+            <span class="badge bg-primary">name: @_filterName <button class="btn btn-sm btn-link p-0 text-white ms-1" @onclick='() => ClearFilter("name")'>×</button></span>
+        }
+        @if (!string.IsNullOrEmpty(_filterEnabled))
+        {
+            <span class="badge bg-primary">@_filterEnabled <button class="btn btn-sm btn-link p-0 text-white ms-1" @onclick='() => ClearFilter("enabled")'>×</button></span>
+        }
+        @if (!string.IsNullOrEmpty(_filterSla))
+        {
+            <span class="badge bg-primary">SLA @_filterSla <button class="btn btn-sm btn-link p-0 text-white ms-1" @onclick='() => ClearFilter("sla")'>×</button></span>
+        }
+        @if (!string.IsNullOrEmpty(_filterConnection))
+        {
+            var connName = _connections.FirstOrDefault(c => c.Id.ToString() == _filterConnection)?.Name ?? _filterConnection;
+            <span class="badge bg-primary">connection: @connName <button class="btn btn-sm btn-link p-0 text-white ms-1" @onclick='() => ClearFilter("connection")'>×</button></span>
+        }
+        @if (!string.IsNullOrWhiteSpace(_filterTag))
+        {
+            <span class="badge bg-primary">tag: @_filterTag <button class="btn btn-sm btn-link p-0 text-white ms-1" @onclick='() => ClearFilter("tag")'>×</button></span>
+        }
+        <button class="btn btn-sm btn-link p-0 ms-2" @onclick="ClearAllFilters">全部清除</button>
+    </div>
 }
 
 @if (_items is not null && _items.Count > 5)
@@ -467,6 +501,36 @@ else
     private string _filterTag = "";
     private List<EtlTool.Core.Models.ConnectionDefinition> _connections = new();
 
+    private bool HasActiveFilter =>
+        !string.IsNullOrWhiteSpace(_filterName) ||
+        !string.IsNullOrEmpty(_filterEnabled) ||
+        !string.IsNullOrEmpty(_filterSla) ||
+        !string.IsNullOrEmpty(_filterConnection) ||
+        !string.IsNullOrWhiteSpace(_filterTag);
+
+    private void ClearAllFilters()
+    {
+        _filterName = "";
+        _filterEnabled = "";
+        _filterSla = "";
+        _filterConnection = "";
+        _filterTag = "";
+        ApplyFilter();
+    }
+
+    private void ClearFilter(string which)
+    {
+        switch (which)
+        {
+            case "name": _filterName = ""; break;
+            case "enabled": _filterEnabled = ""; break;
+            case "sla": _filterSla = ""; break;
+            case "connection": _filterConnection = ""; break;
+            case "tag": _filterTag = ""; break;
+        }
+        ApplyFilter();
+    }
+
     private void SetTagFilter(string tag)
     {
         _filterTag = tag;
@@ -676,7 +740,9 @@ else
         try
         {
             var ct = CancellationToken.None;
-            var targets = _items.Where(t => t.Enabled != _bulkEnable).ToList();
+            // 若 admin 在 Tasks list 啟用了篩選，bulk 只作用於該子集 — 否則作用於全部
+            var pool = HasActiveFilter ? (_filtered ?? _items) : _items;
+            var targets = pool.Where(t => t.Enabled != _bulkEnable).ToList();
 
             // 批次「啟用」時，跳過 auto-disabled 任務（避免無腦把壞掉的 task 重新打開）
             // — admin 必須走逐筆 re-enable 確認流程
