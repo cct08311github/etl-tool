@@ -60,7 +60,10 @@ html, body {
     font-feature-settings: 'cv11', 'ss01', 'ss03';
     color: var(--text);
     background: var(--bg-page);
-    font-size: 14px;
+    /* Base = 16px（瀏覽器預設 / Bootstrap / Tailwind 主流值）。
+       所有元件 font-size 均用 rem，改這一個會等比放大全站文字。
+       若覺得太大可調 15px；想最緊湊可回 14px。 */
+    font-size: 16px;
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
