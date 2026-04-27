@@ -174,6 +174,48 @@ public static class TaskCsvImporter
         return lines;
     }
 
+    /// <summary>The canonical CSV header line. Use for downloads / templates.</summary>
+    public static string CanonicalHeader =>
+        "name,source_connection,source_schema,source_table," +
+        "target_connection,target_schema,target_table," +
+        "write_mode,cron,enabled,tags";
+
+    /// <summary>
+    /// Render a list of EtlTask + connection-name lookup back to the canonical CSV
+    /// format (header + N rows). Round-trip with Parse: export → edit → import.
+    /// </summary>
+    public static string Render(IEnumerable<EtlTask> tasks, IReadOnlyDictionary<Guid, string> connNameById)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(CanonicalHeader);
+        foreach (var t in tasks)
+        {
+            connNameById.TryGetValue(t.SourceConnectionId, out var srcName);
+            connNameById.TryGetValue(t.TargetConnectionId, out var tgtName);
+            sb.AppendLine(string.Join(',',
+                CsvEscape(t.Name),
+                CsvEscape(srcName ?? t.SourceConnectionId.ToString()),
+                CsvEscape(t.SourceSchema ?? ""),
+                CsvEscape(t.SourceTable ?? ""),
+                CsvEscape(tgtName ?? t.TargetConnectionId.ToString()),
+                CsvEscape(t.TargetSchema ?? ""),
+                CsvEscape(t.TargetTable ?? ""),
+                t.WriteMode.ToString(),
+                CsvEscape(t.CronExpression ?? ""),
+                t.Enabled ? "true" : "false",
+                CsvEscape(t.Tags ?? "")));
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>RFC 4180 escape — quotes string if it contains comma / newline / quote.</summary>
+    public static string CsvEscape(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        if (s.IndexOfAny(new[] { ',', '"', '\n', '\r' }) < 0) return s;
+        return "\"" + s.Replace("\"", "\"\"") + "\"";
+    }
+
     /// <summary>RFC 4180 parser — handles "" escape and commas inside quotes.</summary>
     public static List<string> ParseCsvLine(string line)
     {

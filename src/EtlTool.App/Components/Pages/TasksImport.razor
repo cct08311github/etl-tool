@@ -11,18 +11,37 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">批次匯入任務 (CSV)</h1>
-    <a class="btn btn-link" href="tasks">← 返回任務列表</a>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="/Account/TasksExport?template=true" target="_blank" title="下載一筆範例的 CSV，可用 Excel 開啟修改">
+            📄 下載範本
+        </a>
+        <a class="btn btn-outline-secondary" href="/Account/TasksExport" target="_blank" title="下載目前所有任務的 CSV — 可在 Excel 編輯後再 import 覆蓋（注意：import 是建立新 task，不會更新既有的）">
+            📥 下載目前所有任務
+        </a>
+        <a class="btn btn-link" href="tasks">← 返回</a>
+    </div>
 </div>
 
 <div class="alert alert-info small">
-    上傳 CSV 一次建立多個 ETL 任務。需含 header 欄位（順序無關）：
-    <code>name, source_connection, source_schema, source_table, target_connection, target_schema, target_table, write_mode, cron, enabled, tags</code>
-    <ul class="mb-0 mt-1">
-        <li><code>source_connection</code> / <code>target_connection</code> = 已存在的連線名稱</li>
-        <li><code>write_mode</code> = <code>DeleteInsert</code> 或 <code>Upsert</code></li>
-        <li><code>enabled</code> = <code>true</code> / <code>false</code> / <code>1</code> / <code>0</code> 等（缺省 = true）</li>
-        <li><code>tags</code> 含逗號時請用引號：<code>"daily,critical"</code></li>
-    </ul>
+    上傳 CSV 一次建立多個 ETL 任務。Header 欄位（順序無關）：
+    <table class="table table-sm mb-0 mt-2 small">
+        <thead>
+            <tr><th>欄位</th><th>必填</th><th>說明 / 範例</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>name</code></td><td>✓</td><td>任務名稱（會檢查唯一性，沒指定則 import 失敗）— 例：<code>OrdersDaily</code></td></tr>
+            <tr><td><code>source_connection</code></td><td>✓</td><td>已存在的連線 <strong>名稱</strong>（不是 GUID）— 例：<code>prod-mssql</code></td></tr>
+            <tr><td><code>source_schema</code></td><td>—</td><td>來源 schema — 例：<code>dbo</code> / <code>HR</code></td></tr>
+            <tr><td><code>source_table</code></td><td>✓</td><td>來源表名 — 例：<code>Orders_SRC</code></td></tr>
+            <tr><td><code>target_connection</code></td><td>✓</td><td>目標連線名稱</td></tr>
+            <tr><td><code>target_schema</code></td><td>—</td><td>目標 schema</td></tr>
+            <tr><td><code>target_table</code></td><td>✓</td><td>目標表名</td></tr>
+            <tr><td><code>write_mode</code></td><td>✓</td><td><code>DeleteInsert</code> 或 <code>Upsert</code></td></tr>
+            <tr><td><code>cron</code></td><td>✓</td><td>Quartz cron 表達式 — 例：<code>0 0 2 * * ?</code> = 每天 02:00</td></tr>
+            <tr><td><code>enabled</code></td><td>—</td><td><code>true</code> / <code>false</code> / <code>1</code> / <code>0</code> / <code>yes</code> / <code>no</code>，缺省 = true</td></tr>
+            <tr><td><code>tags</code></td><td>—</td><td>逗號分隔；含逗號要加引號：<code>"daily,critical"</code></td></tr>
+        </tbody>
+    </table>
 </div>
 
 <div class="card mb-3">

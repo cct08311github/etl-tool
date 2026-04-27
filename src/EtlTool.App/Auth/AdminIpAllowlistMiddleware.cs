@@ -23,6 +23,7 @@ public sealed class AdminIpAllowlistMiddleware
         "/Account/AuditExport",        // downloading full audit trail = sensitive
         "/Account/SqliteBackup",       // downloading entire DB = extremely sensitive
         "/Account/BackupFile",         // download / delete individual backup files
+        "/Account/TasksExport",        // bulk export of all tasks (config snapshot)
     };
 
     private readonly RequestDelegate _next;

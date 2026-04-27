@@ -151,4 +151,84 @@ public class TaskCsvImporterTests
     {
         Assert.Equal(new[] { "", "", "" }, TaskCsvImporter.ParseCsvLine(",,"));
     }
+
+    [Theory]
+    [InlineData("hello", "hello")]
+    [InlineData("", "")]
+    [InlineData("a,b", "\"a,b\"")]
+    [InlineData("she said \"hi\"", "\"she said \"\"hi\"\"\"")]
+    [InlineData("multi\nline", "\"multi\nline\"")]
+    public void CsvEscape_quotes_when_needed(string input, string expected)
+    {
+        Assert.Equal(expected, TaskCsvImporter.CsvEscape(input));
+    }
+
+    [Fact]
+    public void CanonicalHeader_exposes_expected_columns()
+    {
+        var header = TaskCsvImporter.CanonicalHeader;
+        Assert.Contains("name", header);
+        Assert.Contains("source_connection", header);
+        Assert.Contains("write_mode", header);
+        Assert.Contains("tags", header);
+    }
+
+    [Fact]
+    public void Render_then_parse_round_trips()
+    {
+        var srcConnId = Guid.NewGuid();
+        var tgtConnId = Guid.NewGuid();
+        var task = new EtlTool.Core.Models.EtlTask
+        {
+            Name = "RoundTrip,Test",  // commas in name require escape
+            SourceConnectionId = srcConnId,
+            SourceSchema = "dbo",
+            SourceTable = "T1",
+            TargetConnectionId = tgtConnId,
+            TargetSchema = "HR",
+            TargetTable = "T2",
+            WriteMode = WriteMode.Upsert,
+            CronExpression = "0 0 2 * * ?",
+            Enabled = false,
+            Tags = "daily,critical",
+        };
+        var connNames = new Dictionary<Guid, string>
+        {
+            [srcConnId] = "src-conn",
+            [tgtConnId] = "tgt-conn",
+        };
+
+        var csv = TaskCsvImporter.Render(new[] { task }, connNames);
+        var result = TaskCsvImporter.Parse(csv);
+
+        Assert.Equal(1, result.OkCount);
+        var row = result.Rows[0];
+        Assert.Equal("RoundTrip,Test", row.Name);
+        Assert.Equal("src-conn", row.SourceConnection);
+        Assert.Equal("tgt-conn", row.TargetConnection);
+        Assert.Equal(WriteMode.Upsert, row.WriteMode);
+        Assert.False(row.Enabled);
+        Assert.Equal("daily,critical", row.Tags);
+    }
+
+    [Fact]
+    public void Render_uses_GUID_when_connection_name_missing()
+    {
+        var srcConnId = Guid.NewGuid();
+        var tgtConnId = Guid.NewGuid();
+        var task = new EtlTool.Core.Models.EtlTask
+        {
+            Name = "T",
+            SourceConnectionId = srcConnId,
+            TargetConnectionId = tgtConnId,
+            SourceTable = "x",
+            TargetTable = "y",
+            CronExpression = "0 0 * * * ?",
+        };
+        // empty lookup
+        var csv = TaskCsvImporter.Render(new[] { task },
+            new Dictionary<Guid, string>());
+        Assert.Contains(srcConnId.ToString(), csv);
+        Assert.Contains(tgtConnId.ToString(), csv);
+    }
 }

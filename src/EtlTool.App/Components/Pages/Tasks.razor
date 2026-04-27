@@ -46,9 +46,14 @@
         </AuthorizeView>
         <AuthorizeView Roles="Admin">
             <Authorized>
-                <a class="btn btn-outline-primary" href="tasks/import" title="批次匯入 CSV">
-                    <Icon Name="external-link" /> 匯入 CSV
-                </a>
+                <div class="btn-group" role="group">
+                    <a class="btn btn-outline-primary" href="tasks/import" title="批次匯入 CSV">
+                        <Icon Name="external-link" /> 匯入 CSV
+                    </a>
+                    <a class="btn btn-outline-primary" href="/Account/TasksExport" target="_blank" title="下載所有任務 CSV">
+                        <Icon Name="download" /> 匯出
+                    </a>
+                </div>
             </Authorized>
         </AuthorizeView>
         <AuthorizeView Roles="Admin,Operator">
