@@ -9,6 +9,7 @@
 @inject EtlTool.Core.Engine.EtlEngine EtlEngine
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthState
+@inject IConfiguration Config
 
 <PageTitle>編輯任務</PageTitle>
 
@@ -16,11 +17,48 @@
     <h1 class="m-0">@(Id is null ? "新增任務" : "編輯任務")</h1>
     @if (Id is not null)
     {
-        <a class="btn btn-outline-secondary btn-sm" href="@($"tasks/{Id}/history")">
-            <Icon Name="history" /> 變更歷史
-        </a>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-info btn-sm" @onclick="ShowWebhookPreview">
+                <Icon Name="zap" /> 預覽 webhook payload
+            </button>
+            <a class="btn btn-outline-secondary btn-sm" href="@($"tasks/{Id}/history")">
+                <Icon Name="history" /> 變更歷史
+            </a>
+        </div>
     }
 </div>
+
+@if (_showWebhookPreview)
+{
+    <div class="modal show d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">📡 Webhook payload 預覽（不會實際發送）</h5>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-2 small text-muted">
+                        以下是當此任務 <strong>失敗</strong> 時實際會 POST 到 webhook 的 JSON。
+                        Format 來自 <code>Webhooks:Format</code> 設定（目前 = <code>@_webhookFormat</code>）。
+                        Streak / Recovery prefix 由 <code>StreakAwareFailureNotifier</code> 加，這裡呈現「第 N 次連敗達門檻」的範例。
+                    </div>
+                    <div class="d-flex gap-2 mb-2">
+                        <button class="btn btn-sm @(_previewVariant == "fail" ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="SetPreviewVariantFail">單次失敗</button>
+                        <button class="btn btn-sm @(_previewVariant == "streak" ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="SetPreviewVariantStreak">[STREAK] 達門檻</button>
+                        <button class="btn btn-sm @(_previewVariant == "recovery" ? "btn-primary" : "btn-outline-secondary")"
+                                @onclick="SetPreviewVariantRecovery">[RECOVERY] 恢復</button>
+                    </div>
+                    <pre class="bg-light p-2 mb-0" style="max-height: 480px; overflow: auto; font-size: 0.8rem">@_webhookPreviewJson</pre>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => _showWebhookPreview = false">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
 
 @if (_showPiiSuggest)
 {
@@ -564,6 +602,69 @@ else
     private bool _showPiiSuggest;
     private bool _piiCheckPassed;
     private List<string> _piiSuggestColumns = new();
+
+    // Webhook payload preview
+    private bool _showWebhookPreview;
+    private string _previewVariant = "fail";
+    private string? _webhookPreviewJson;
+    private string _webhookFormat = "generic";
+
+    private void ShowWebhookPreview()
+    {
+        _webhookFormat = Config["Webhooks:Format"] ?? "generic";
+        _previewVariant = "fail";
+        BuildPreview();
+        _showWebhookPreview = true;
+    }
+
+    private void SetPreviewVariant(string variant)
+    {
+        _previewVariant = variant;
+        BuildPreview();
+    }
+
+    private void SetPreviewVariantFail() => SetPreviewVariant("fail");
+    private void SetPreviewVariantStreak() => SetPreviewVariant("streak");
+    private void SetPreviewVariantRecovery() => SetPreviewVariant("recovery");
+
+    private void BuildPreview()
+    {
+        if (_task is null) return;
+
+        var format = EtlTool.App.Services.WebhookPayloadBuilder.ParseFormat(_webhookFormat);
+        var (fakeRun, error) = _previewVariant switch
+        {
+            "streak" => MakePreviewRun(EtlTool.Core.Models.RunStatus.Failed, "[STREAK 3/3] connection refused: timed out"),
+            "recovery" => MakePreviewRun(EtlTool.Core.Models.RunStatus.Success, "[RECOVERY after 3 consecutive failures]"),
+            _ => MakePreviewRun(EtlTool.Core.Models.RunStatus.Failed, "connection refused: timed out"),
+        };
+
+        var payload = EtlTool.App.Services.WebhookPayloadBuilder.BuildPayload(format, _task, fakeRun, error);
+        _webhookPreviewJson = System.Text.Json.JsonSerializer.Serialize(payload,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
+    }
+
+    private (EtlTool.Core.Models.RunHistory run, string? error) MakePreviewRun(
+        EtlTool.Core.Models.RunStatus status, string error)
+    {
+        var run = new EtlTool.Core.Models.RunHistory
+        {
+            Id = Guid.NewGuid(),
+            EtlTaskId = _task!.Id,
+            Status = status,
+            StartedAt = DateTime.UtcNow.AddMinutes(-2),
+            FinishedAt = DateTime.UtcNow,
+            RowsRead = status == EtlTool.Core.Models.RunStatus.Failed ? 100 : 1234,
+            RowsWritten = status == EtlTool.Core.Models.RunStatus.Failed ? 0 : 1234,
+            TriggerType = EtlTool.Core.Models.TriggerType.Scheduled,
+            ErrorMessage = error,
+        };
+        return (run, error);
+    }
 
     private async Task EnableMaskAndSave()
     {

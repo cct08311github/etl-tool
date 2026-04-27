@@ -7,7 +7,16 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="m-0">執行歷史 — @(_taskName ?? "…")</h1>
-    <a class="btn btn-outline-secondary" href="tasks">← 返回任務列表</a>
+    <div class="d-flex gap-2">
+        <AuthorizeView Roles="Admin,Operator">
+            <Authorized>
+                <a class="btn btn-outline-secondary" href="@($"/Account/RunHistoryExport/{Id}?from={DateTime.UtcNow.AddDays(-30):yyyy-MM-dd}&to={DateTime.UtcNow:yyyy-MM-dd}")" target="_blank">
+                    <Icon Name="download" /> 匯出 CSV (近 30 天)
+                </a>
+            </Authorized>
+        </AuthorizeView>
+        <a class="btn btn-outline-secondary" href="tasks">← 返回任務列表</a>
+    </div>
 </div>
 
 <div class="card mb-3">
