@@ -361,6 +361,25 @@ public sealed class EtlEngine
         if (task.WriteMode == WriteMode.Upsert && keyCols.Count == 0)
             throw new InvalidOperationException("Upsert 模式需至少勾選一個主鍵欄位 (IsKey)。");
 
+        // Compile row-level filter once（DynamicExpresso lambda over IDataRecord → bool）
+        // 空字串 / null = 不過濾
+        Func<System.Data.IDataRecord, bool>? rowFilter = null;
+        if (!string.IsNullOrWhiteSpace(task.FileRowFilterExpression))
+        {
+            try
+            {
+                var interp = new DynamicExpresso.Interpreter();
+                interp.SetVariable("System", typeof(System.Convert).Namespace, typeof(System.Convert).Assembly.GetType("System.Convert"));
+                rowFilter = interp.ParseAsDelegate<Func<System.Data.IDataRecord, bool>>(
+                    task.FileRowFilterExpression!, "row");
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"FileRowFilterExpression 編譯失敗：{ex.Message}（表達式：{task.FileRowFilterExpression}）", ex);
+            }
+        }
+
         var reader = FileSourceReaderFactory.Create(fileConfig.Format);
         long totalRowsRead = 0, totalRowsWritten = 0;
         var processedFiles = new List<string>();
@@ -429,8 +448,31 @@ public sealed class EtlEngine
                     }
 
                     // Streaming row loop — 用同一筆 IDataReader 處理 CSV/Excel/Text
+                    long rowsFilteredOut = 0;
                     while (fileReader.Read())
                     {
+                        // Row-level filter（in-memory）：如有，先建 ArrayRecord 餵給 lambda
+                        // 不符合 → 跳過（不算 rowsRead，不進 batch，不採樣）— 這樣 RunHistory 顯示
+                        // 的「讀」就是「實際進入處理流程」的數量，與 DB pushdown 模式語意一致
+                        if (rowFilter is not null)
+                        {
+                            // 建一個 ArrayRecord 包當前 row 的值給 filter 用
+                            var srcVals = new object?[openResult.ColumnNames.Count];
+                            for (int i = 0; i < srcVals.Length; i++)
+                                srcVals[i] = fileReader.IsDBNull(i) ? null : fileReader.GetValue(i);
+                            var ordByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                            for (int i = 0; i < openResult.ColumnNames.Count; i++)
+                                ordByName[openResult.ColumnNames[i]] = i;
+                            var filterRecord = new ArrayRecord(openResult.ColumnNames, srcVals, ordByName);
+                            bool keep;
+                            try { keep = rowFilter(filterRecord); }
+                            catch (Exception ex)
+                            {
+                                throw new InvalidOperationException(
+                                    $"FileRowFilterExpression 在 row {rowsReadInFile + rowsFilteredOut + 1} 執行失敗：{ex.Message}", ex);
+                            }
+                            if (!keep) { rowsFilteredOut++; continue; }
+                        }
                         rowsReadInFile++;
                         // 把 file row 轉成「source 欄名 → 值」字典，再用 evaluator 投影到 target 欄位
                         var row = ProjectFileRow(fileReader, openResult.ColumnNames, evaluator, task);
@@ -475,7 +517,8 @@ public sealed class EtlEngine
 
                     totalRowsRead += rowsReadInFile;
                     totalRowsWritten += rowsWrittenInFile;
-                    processedFiles.Add($"{match.FileName} (read={rowsReadInFile}, written={rowsWrittenInFile})");
+                    var filteredSuffix = rowsFilteredOut > 0 ? $", filtered_out={rowsFilteredOut}" : "";
+                    processedFiles.Add($"{match.FileName} (read={rowsReadInFile}, written={rowsWrittenInFile}{filteredSuffix})");
 
                     // Post-action（在 transaction commit 之後做；失敗也只是 audit）
                     try

@@ -581,6 +581,57 @@ else
                                 ⚠ 「原封不動」模式下，下次掃描會再讀同樣的檔造成重複匯入。建議搭配檔名含時間戳（會變動）+ Upsert 模式。
                             </div>
                         }
+                        <hr />
+                        <div>
+                            <label class="form-label">
+                                🔍 Row 過濾（in-memory，可選）
+                                <span class="badge bg-info text-dark ms-1" style="font-weight: normal">DynamicExpresso</span>
+                            </label>
+                            <textarea class="form-control font-monospace" rows="2"
+                                      @bind="_task.FileRowFilterExpression"
+                                      placeholder="留空 = 不過濾。例：(int)row[&quot;AMOUNT&quot;] > 1000"></textarea>
+                            <details class="small mt-1">
+                                <summary class="text-primary" style="cursor: pointer">展開：用法、範例、注意事項</summary>
+                                <div class="mt-2 p-2 bg-light rounded">
+                                    <p class="mb-2">
+                                        每從檔案讀進一筆 row 立刻判定，false → 跳過，不寫目標、不算入 read/written。
+                                        <strong>檔案 streaming 仍然成立</strong> — 不會把整檔載入再過濾。
+                                    </p>
+                                    <p class="mb-2">
+                                        <strong>上下文：</strong>表達式中 <code>row</code> 為 <code>IDataRecord</code>，
+                                        以欄位名取值：<code>row["欄位名"]</code>（永遠回 <code>object</code>，型別需轉）。
+                                    </p>
+                                    <table class="table table-sm small mb-0">
+                                        <thead>
+                                            <tr><th>意圖</th><th>範例</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr><td>金額大於 1000</td>
+                                                <td><code>(int)row["AMOUNT"] > 1000</code></td></tr>
+                                            <tr><td>地區 = 台北市</td>
+                                                <td><code>(string)row["REGION"] == "台北市"</code></td></tr>
+                                            <tr><td>地區開頭是「台」</td>
+                                                <td><code>((string)row["REGION"]).StartsWith("台")</code></td></tr>
+                                            <tr><td>狀態 ACTIVE 且非空</td>
+                                                <td><code>row["STATUS"] != null && (string)row["STATUS"] == "ACTIVE"</code></td></tr>
+                                            <tr><td>多條件 AND</td>
+                                                <td><code>(int)row["AMOUNT"] > 0 && ((string)row["TYPE"]).EndsWith("_OK")</code></td></tr>
+                                            <tr><td>排除特定 ID 範圍</td>
+                                                <td><code>!(((string)row["ID"]).StartsWith("TEST_"))</code></td></tr>
+                                        </tbody>
+                                    </table>
+                                    <div class="small text-muted mt-2">
+                                        ⚠ 注意事項：
+                                        <ul class="mb-0">
+                                            <li>row 值多半是 <code>string</code>（CSV / 文字檔／FixedWidth）；Excel 數值會是 <code>double</code>，日期是 <code>DateTime</code></li>
+                                            <li>表達式編譯失敗 → 整個 run 直接 fail（不會「靜悄悄略過」）</li>
+                                            <li>每筆 row 評估一次；複雜表達式會稍微拖慢吞吐量</li>
+                                            <li>大量資料量篩選（&gt; 100k 列）建議改用 SQL pushdown — 讓 source 為 DB，用 Filter 模式（form / raw SQL）</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
                     }
                 </div>
             </div>

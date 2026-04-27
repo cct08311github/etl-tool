@@ -16,6 +16,22 @@ public class EtlTask
     /// <summary>當 SourceKind=File 時的設定 JSON（FileSourceConfig 序列化）。</summary>
     public string? FileSourceConfigJson { get; set; }
 
+    /// <summary>
+    /// 檔案模式 row-level filter（DynamicExpresso 表達式，return bool）。
+    /// 為什麼需要：DB 模式可以把 WHERE 推到 source DB，只讀符合的 row；檔案模式
+    /// 沒有 SQL 可推 — 必須先讀 row 才能判斷。所以這是「in-memory filter」：
+    /// 每筆從檔案讀進來的 row 立刻判定，false → 直接跳過不進 batch、不寫目標、
+    /// 不算入 RowsRead/Written。Streaming 仍然成立（不會把整檔一次載入）。
+    ///
+    /// 表達式以 row 為上下文：
+    ///   (int)row["AMOUNT"] > 1000
+    ///   ((string)row["REGION"]).StartsWith("台")
+    ///   row["STATUS"] != null && (string)row["STATUS"] == "ACTIVE"
+    ///
+    /// 空 / null = 不過濾（讀全部）。
+    /// </summary>
+    public string? FileRowFilterExpression { get; set; }
+
     public Guid SourceConnectionId { get; set; }
     public string SourceSchema { get; set; } = "";
     public string SourceTable { get; set; } = "";
