@@ -4,6 +4,7 @@
 @inject EtlTool.Data.Repositories.EtlTaskRepository TaskRepo
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
 @inject EtlTool.Data.Repositories.UserRepository UserRepo
+@inject EtlTool.Data.Repositories.RunHistoryRepository RunHistoryRepo2
 @inject EtlTool.Data.Repositories.AuditChainVerifier ChainVerifier
 @inject EtlTool.Core.Scheduling.SchedulerKillSwitch KillSwitch
 @inject EtlTool.App.Auth.UserAuthService AuthSvc
@@ -108,6 +109,40 @@
 }
 else
 {
+    @if (_worstSla is not null && _worstSla.Count > 0)
+    {
+        <div class="card mb-3 border-warning">
+            <div class="card-header bg-warning text-dark">
+                ⚠ SLA 較低任務（過去 30 天，&lt; 95% 成功率，最多顯示 5 個）
+            </div>
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>任務</th>
+                        <th style="width:90px">成功率</th>
+                        <th style="width:120px">執行 / 成功</th>
+                        <th class="text-end">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var w in _worstSla)
+                {
+                    var pct = w.Success * 100.0 / w.Total;
+                    var cls = pct >= 95 ? "bg-warning text-dark" : "bg-danger";
+                    <tr>
+                        <td><strong>@w.TaskName</strong></td>
+                        <td><span class="badge @cls">@($"{pct:F0}%")</span></td>
+                        <td class="small text-muted">@w.Total / @w.Success</td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-secondary" href="@($"tasks/{w.TaskId}/runs")">看執行歷史</a>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+
     <div class="row g-3 mb-4">
         <div class="col-md-3 col-sm-6">
             <div class="stat-card @(_unhealthyConnections > 0 ? "stat-danger" : "")">
@@ -213,6 +248,9 @@ else
     private record PasswordExpiryWarn(string Title, string Detail, bool IsCritical);
     private PasswordExpiryWarn? _passwordWarn;
 
+    private record SlaRow(Guid TaskId, string TaskName, int Success, int Total);
+    private List<SlaRow>? _worstSla;
+
     protected override async Task OnInitializedAsync()
     {
         var ct = CancellationToken.None;
@@ -230,6 +268,29 @@ else
         _recentSuccess = runs.Count(r => r.StartedAt >= since && r.Status == RunStatus.Success);
         _recentFailed = runs.Count(r => r.StartedAt >= since && r.Status == RunStatus.Failed);
         _recentRuns = runs.Take(15).ToList();
+
+        // SLA 排行榜：取過去 30 天，<95% 的 task 取最差 5 個
+        try
+        {
+            var slaMap = await RunHistoryRepo2.SuccessRateByTaskAsync(TimeSpan.FromDays(30), ct);
+            var rows = new List<SlaRow>();
+            foreach (var kvp in slaMap)
+            {
+                var stats = kvp.Value;
+                if (stats.Total == 0) continue;
+                if (stats.Success * 100.0 / stats.Total >= 95) continue;
+                if (!_taskNames.TryGetValue(kvp.Key, out var tname)) continue;
+                rows.Add(new SlaRow(kvp.Key, tname, stats.Success, stats.Total));
+            }
+            _worstSla = rows
+                .OrderBy(r => r.Success * 1.0 / r.Total)
+                .Take(5)
+                .ToList();
+        }
+        catch
+        {
+            _worstSla = null;
+        }
 
         _loading = false;
 

@@ -28,6 +28,27 @@ else
                 <tr><th>觸發類型</th><td>@_run.TriggerType</td></tr>
                 <tr><th>讀取筆數</th><td>@_run.RowsRead</td></tr>
                 <tr><th>寫入筆數</th><td>@_run.RowsWritten</td></tr>
+                <tr><th>吞吐 (rows/sec)</th>
+                    <td>
+                        @{
+                            var dur = _run.FinishedAt is null ? TimeSpan.Zero : (_run.FinishedAt.Value - _run.StartedAt);
+                            var totalRows = _run.RowsRead + _run.RowsWritten;
+                        }
+                        @if (dur.TotalSeconds < 0.5 || totalRows == 0)
+                        {
+                            <span class="text-muted">—</span>
+                        }
+                        else
+                        {
+                            var rps = totalRows / dur.TotalSeconds;
+                            <span class="font-monospace">@($"{rps:F0}")</span>
+                            <small class="text-muted ms-2">
+                                ({totalRows} 筆 / @($"{dur.TotalSeconds:F1}") 秒
+                                ；讀取 @_run.RowsRead / 寫入 @_run.RowsWritten)
+                            </small>
+                        }
+                    </td>
+                </tr>
             </table>
         </div>
     </div>

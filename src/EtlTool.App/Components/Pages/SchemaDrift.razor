@@ -5,6 +5,7 @@
 @inject EtlTool.Data.Repositories.ConnectionRepository ConnRepo
 @inject EtlTool.Core.Connectors.IDbConnectorFactory ConnectorFactory
 @inject EtlTool.Core.Connectors.IConnectionStringProtector Protector
+@inject AuthenticationStateProvider AuthState
 
 <PageTitle>Schema 漂移 — @(_task?.Name ?? "…")</PageTitle>
 
@@ -15,9 +16,21 @@
             @if (_loading) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
             <span class="ms-1">重新查 live schema</span>
         </button>
+        @if (_diffSummary.HasAny && _live is not null)
+        {
+            <button class="btn btn-warning btn-sm" @onclick="RebuildSnapshot" disabled="@_busy">
+                @if (_busy) { <Icon Name="loader" /> } else { <Icon Name="refresh" /> }
+                <span class="ms-1">用 Live schema 重建快照</span>
+            </button>
+        }
         <a class="btn btn-outline-secondary btn-sm" href="@($"tasks/{Id}")">← 返回任務</a>
     </div>
 </div>
+
+@if (_rebuildMsg is not null)
+{
+    <div class="alert @(_rebuildOk ? "alert-success" : "alert-danger") small">@_rebuildMsg</div>
+}
 
 @if (_task is null)
 {
@@ -244,5 +257,39 @@ else
         if (_changedSummary.ContainsKey(c.Name))
             return new CellStatus("table-warning", "型別變更", "bg-warning text-dark");
         return new CellStatus(null, null, null);
+    }
+
+    private bool _busy;
+    private string? _rebuildMsg;
+    private bool _rebuildOk;
+
+    private async Task RebuildSnapshot()
+    {
+        if (_task is null || _live is null) return;
+        _busy = true;
+        _rebuildMsg = null;
+        try
+        {
+            var state = await AuthState.GetAuthenticationStateAsync();
+            var actor = state.User.Identity?.Name;
+            _task.SourceSchemaSnapshotJson = System.Text.Json.JsonSerializer.Serialize(_live);
+            _task.SchemaSnapshotAt = DateTime.UtcNow;
+            await TaskRepo.UpdateAsync(_task, CancellationToken.None, actor: actor);
+
+            // 快照已更新，重整本地 state 讓 UI 反映
+            _snapshot = _live!.ToList();
+            ComputeDiff();
+            _rebuildOk = true;
+            _rebuildMsg = $"✓ Schema 快照已用當前 live schema 重建（@ {_task.SchemaSnapshotAt?.ToLocalTime():HH:mm:ss}）";
+        }
+        catch (Exception ex)
+        {
+            _rebuildOk = false;
+            _rebuildMsg = $"重建失敗：{ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 }
