@@ -169,16 +169,59 @@ else
 
     <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <span>SQLite 一鍵備份</span>
+            <span>SQLite 備份</span>
             <a class="btn btn-sm btn-primary" href="/Account/SqliteBackup" target="_blank">
-                <Icon Name="download" /> 下載備份檔
+                <Icon Name="download" /> 立即下載新備份
             </a>
         </div>
-        <div class="card-body small text-muted">
-            點擊「下載備份檔」會在伺服器執行 SQLite <code>VACUUM INTO</code> 產生一致性備份，
-            然後串流下載 <code>etltool-YYYYMMDD-HHmmss.db</code>。產生過程不阻斷其他連線；
-            備份檔可由其他工具開啟驗證或匯入到 staging 環境。每次下載寫一筆 audit。
+        <div class="card-body small text-muted py-2">
+            點擊「立即下載新備份」會在伺服器執行 <code>VACUUM INTO</code> 一致性備份並串流下載；
+            另外排程器每天 03:45 自動寫入 <code>@(_backupSummary?.Directory ?? "(未載入)")</code>。
+            @if (_backupSummary is not null && _backupSummary.RetainCount > 0)
+            {
+                <span> 保留最新 <strong>@_backupSummary.RetainCount</strong> 份。</span>
+            }
         </div>
+        @if (_backupFiles is not null && _backupFiles.Count > 0)
+        {
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>檔名</th>
+                        <th style="width: 100px">大小</th>
+                        <th style="width: 140px">建立時間</th>
+                        <th style="width: 100px">年齡</th>
+                        <th style="width: 160px" class="text-end">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var bf in _backupFiles)
+                {
+                    var ageDays = (int)(DateTime.UtcNow - bf.CreatedUtc).TotalDays;
+                    var ageColor = ageDays > 30 ? "text-danger" : ageDays > 7 ? "text-warning" : "text-muted";
+                    <tr>
+                        <td><code class="small">@bf.Name</code></td>
+                        <td class="small text-muted">@FormatBytes(bf.Size)</td>
+                        <td class="small text-muted">@bf.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm</td>
+                        <td class="small @ageColor">@ageDays 天前</td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-link p-0 me-2" href="@($"/Account/BackupFile?handler=Download&name={bf.Name}")" target="_blank">下載</a>
+                            <a class="btn btn-sm btn-link p-0 text-danger"
+                               href="@($"/Account/BackupFile?handler=Delete&name={bf.Name}")"
+                               onclick="return confirm('確定刪除此備份檔？此動作不可復原。');">刪除</a>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        }
+        else if (_backupFiles is not null)
+        {
+            <div class="card-body small text-muted">
+                @(_backupSummary?.Directory ?? "備份目錄") 內目前沒有任何 etltool-*.db 檔案。
+                可點上方按鈕立即建一份；或等下次 03:45 排程備份。
+            </div>
+        }
     </div>
 
     <div class="card mb-3">
@@ -324,9 +367,71 @@ else
         </div>
     }
 
+    <div class="card mb-3">
+        <div class="card-header">維護視窗預演 (Dry-run)</div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label small">假設時間 (本地)</label>
+                    <input type="datetime-local" class="form-control form-control-sm" @bind="_dryRunInput" />
+                </div>
+                <div class="col-md-4">
+                    <button class="btn btn-sm btn-outline-primary" @onclick="RunDryRun">
+                        <Icon Name="play" /> 預演
+                    </button>
+                    <button class="btn btn-sm btn-link p-0 ms-2" @onclick="UseNow">用現在時間</button>
+                </div>
+            </div>
+            @if (_dryRunResult is not null)
+            {
+                <div class="mt-3">
+                    <p class="small mb-2">
+                        針對時間 <code>@_dryRunResult.At:yyyy-MM-dd HH:mm</code>：
+                        @if (_dryRunResult.ActiveWindows.Count > 0)
+                        {
+                            <span class="badge bg-warning text-dark">⏸ 排程觸發會 SKIP</span>
+                            <span class="ms-2 small text-muted">命中 @_dryRunResult.ActiveWindows.Count 個視窗</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-success">✓ 排程觸發會正常執行</span>
+                            <span class="ms-2 small text-muted">沒有視窗命中</span>
+                        }
+                    </p>
+                    @if (_dryRunResult.ActiveWindows.Count > 0)
+                    {
+                        <table class="table table-sm mb-0">
+                            <thead>
+                                <tr>
+                                    <th>來源</th>
+                                    <th>天</th>
+                                    <th>起</th>
+                                    <th>迄</th>
+                                    <th>原因</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var w in _dryRunResult.ActiveWindows)
+                                {
+                                    <tr>
+                                        <td><span class="badge @(w.Source == "appsettings" ? "bg-secondary" : "bg-primary")">@w.Source</span></td>
+                                        <td><code class="small">@string.Join(", ", w.Days)</code></td>
+                                        <td><code>@w.From</code></td>
+                                        <td><code>@w.To</code></td>
+                                        <td class="small">@(w.Reason ?? "—")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
     <div class="alert alert-info small mb-0">
         提示：本頁僅顯示靜態組態與計數。即時排程器狀態請見 <a href="/scheduler">/scheduler</a>；
-        詳細健康檢查（含元件 latency）請見 <a href="/healthz/detail" target="_blank">/healthz/detail</a>。
+        詳細健康檢查（含元件 latency + 備份新鮮度）請見 <a href="/healthz/detail" target="_blank">/healthz/detail</a>。
     </div>
 }
 
@@ -353,6 +458,11 @@ else
     private string? _chainHeadHash;
     private string? _chainTailHash;
     private List<EtlTool.Core.Models.EtlTask>? _autoDisabled;
+
+    private record BackupFileInfo(string Name, long Size, DateTime CreatedUtc);
+    private record BackupSummary(string Directory, int RetainCount);
+    private List<BackupFileInfo>? _backupFiles;
+    private BackupSummary? _backupSummary;
 
     private IReadOnlyList<EtlTool.Core.Scheduling.MergedMaintenanceWindow>? _maintenanceMerged;
     private EtlTool.Core.Scheduling.MaintenanceWindow? _currentlyActive;
@@ -439,6 +549,32 @@ else
         var actor = state.User.Identity?.Name;
         await MaintRepo.DeleteAsync(id, actor, CancellationToken.None);
         await LoadMaintenanceAsync(CancellationToken.None);
+    }
+
+    // ─── Maintenance window dry-run simulator ────────────────────────────
+    private DateTime _dryRunInput = DateTime.Now;
+    private record DryRunResult(DateTime At, List<EtlTool.Core.Scheduling.MergedMaintenanceWindow> ActiveWindows);
+    private DryRunResult? _dryRunResult;
+
+    private void UseNow()
+    {
+        _dryRunInput = DateTime.Now;
+    }
+
+    private async Task RunDryRun()
+    {
+        var all = await MaintRepo.ListAllAsync(CancellationToken.None);
+        var active = new List<EtlTool.Core.Scheduling.MergedMaintenanceWindow>();
+        foreach (var m in all)
+        {
+            if (!m.Enabled) continue;
+            var mw = new EtlTool.Core.Scheduling.MaintenanceWindow
+            {
+                Days = m.Days, From = m.From, To = m.To, Reason = m.Reason,
+            };
+            if (mw.IsActive(_dryRunInput)) active.Add(m);
+        }
+        _dryRunResult = new DryRunResult(_dryRunInput, active);
     }
 
     private record WebhookTestResult(bool Ok, int? StatusCode, string? Error);
@@ -551,6 +687,32 @@ else
                 .Where(t => t.AutoDisabledAt != null)
                 .OrderByDescending(t => t.AutoDisabledAt)
                 .ToListAsync();
+
+            // Backup files
+            try
+            {
+                var dataDirForBk = Config["DataDirectory"]
+                    ?? Environment.GetEnvironmentVariable("ETLTOOL_DATA_DIR")
+                    ?? Path.Combine(HostEnv.ContentRootPath, "data");
+                var bkDir = Config["Backup:Directory"] ?? Path.Combine(dataDirForBk, "backups");
+                _backupSummary = new BackupSummary(bkDir, Config.GetValue<int?>("Backup:RetainCount") ?? 14);
+                if (Directory.Exists(bkDir))
+                {
+                    _backupFiles = Directory.EnumerateFiles(bkDir, "etltool-*.db")
+                        .Select(p => new FileInfo(p))
+                        .OrderByDescending(fi => fi.Name, StringComparer.Ordinal)
+                        .Select(fi => new BackupFileInfo(fi.Name, fi.Length, fi.CreationTimeUtc))
+                        .ToList();
+                }
+                else
+                {
+                    _backupFiles = new();
+                }
+            }
+            catch
+            {
+                _backupFiles = new();
+            }
 
             // Maintenance windows (merged DB + appsettings)
             await LoadMaintenanceAsync(CancellationToken.None);

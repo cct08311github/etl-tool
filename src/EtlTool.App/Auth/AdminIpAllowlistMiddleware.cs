@@ -22,6 +22,7 @@ public sealed class AdminIpAllowlistMiddleware
         "/system",                     // system info page — paths, sizes, webhook URL host (masked but still)
         "/Account/AuditExport",        // downloading full audit trail = sensitive
         "/Account/SqliteBackup",       // downloading entire DB = extremely sensitive
+        "/Account/BackupFile",         // download / delete individual backup files
     };
 
     private readonly RequestDelegate _next;

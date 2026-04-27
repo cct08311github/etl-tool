@@ -1,0 +1,11 @@
+@page
+@model EtlTool.App.Pages.Account.BackupFileModel
+@{
+    Layout = null;
+}
+@*
+    Multi-handler page:
+      ?handler=Download&name=etltool-...db   — stream backup file
+      ?handler=Delete&name=etltool-...db     — delete a single backup (with audit)
+    Both Admin-only + IP allowlist guarded.
+*@

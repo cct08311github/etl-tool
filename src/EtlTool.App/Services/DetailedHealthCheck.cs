@@ -40,6 +40,9 @@ public static class DetailedHealthCheck
         // — 這個資訊在 Home 頁面會即時跑，這裡只看 audit table 是否寫得進去
         await CheckAuditWriteAsync(services, components, ct);
 
+        // 5) 備份新鮮度：找 Backup:Directory 內最新的 etltool-*.db；無檔或 > 48h → warn
+        CheckBackupAge(services, components);
+
         var overall = components.Values.Any(c => c.Status == "fail") ? "fail"
             : components.Values.Any(c => c.Status == "warn") ? "warn"
             : "ok";
@@ -151,6 +154,54 @@ public static class DetailedHealthCheck
         catch (Exception ex)
         {
             result["audit"] = new ComponentStatus("fail", null, ex.GetType().Name + ": " + ex.Message);
+        }
+    }
+
+    private static void CheckBackupAge(IServiceProvider sp, Dictionary<string, ComponentStatus> result)
+    {
+        try
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var env = sp.GetRequiredService<IHostEnvironment>();
+
+            if (!(config.GetValue<bool?>("Backup:Enabled") ?? true))
+            {
+                result["backup"] = new ComponentStatus("ok", null, "備份服務停用 (Backup:Enabled=false)");
+                return;
+            }
+
+            var dataDir = config["DataDirectory"]
+                ?? Environment.GetEnvironmentVariable("ETLTOOL_DATA_DIR")
+                ?? Path.Combine(env.ContentRootPath, "data");
+            var backupDir = config["Backup:Directory"] ?? Path.Combine(dataDir, "backups");
+            if (!Directory.Exists(backupDir))
+            {
+                result["backup"] = new ComponentStatus("warn", null, $"備份目錄不存在 {backupDir}（first-run？）");
+                return;
+            }
+            var newest = Directory.EnumerateFiles(backupDir, "etltool-*.db")
+                .Select(p => new FileInfo(p))
+                .OrderByDescending(fi => fi.CreationTimeUtc)
+                .FirstOrDefault();
+            if (newest is null)
+            {
+                result["backup"] = new ComponentStatus("warn", null, "備份目錄存在但內無 etltool-*.db 檔");
+                return;
+            }
+            var ageHours = (DateTime.UtcNow - newest.CreationTimeUtc).TotalHours;
+            if (ageHours > 48)
+                result["backup"] = new ComponentStatus("warn", null,
+                    $"最新備份 {newest.Name} 已 {ageHours:F0}h 前（>48h，可能 nightly job 失敗）");
+            else if (ageHours > 30)
+                result["backup"] = new ComponentStatus("warn", null,
+                    $"最新備份 {newest.Name} 已 {ageHours:F0}h 前（>30h，下個排程未執行？）");
+            else
+                result["backup"] = new ComponentStatus("ok", null,
+                    $"最新備份 {newest.Name} ({ageHours:F0}h 前)");
+        }
+        catch (Exception ex)
+        {
+            result["backup"] = new ComponentStatus("fail", null, ex.GetType().Name + ": " + ex.Message);
         }
     }
 
